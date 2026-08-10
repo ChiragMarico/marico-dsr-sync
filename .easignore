@@ -1,0 +1,51 @@
+# What NOT to upload to EAS Build.
+#
+# IMPORTANT: when this file exists, EAS uses it INSTEAD of .gitignore.
+# That is exactly why it exists: .gitignore excludes src/config/s3Config.ts
+# (real AWS keys must never reach GitHub), but the build DOES need that file —
+# src/upload/s3Presign.ts imports it, so without it the JS bundle fails.
+# So: same rules as .gitignore, minus the s3Config.ts exclusion.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+
+# one-off / scratch scripts
+_*.ts
+_*.js
