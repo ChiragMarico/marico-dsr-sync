@@ -12,7 +12,7 @@
     ],
     "android": {
       "package": "com.marico.dsrpilot",
-      "versionCode": 7,
+      "versionCode": 8,
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundColor": "#E8F0F6"
