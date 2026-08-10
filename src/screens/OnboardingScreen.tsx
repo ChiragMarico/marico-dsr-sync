@@ -1,0 +1,291 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
+import { Props } from '../navigation';
+import { Session } from '../types';
+import {
+  checkPreconditions,
+  PreconditionStatus,
+  requestLocationForeground,
+  requestLocationBackground,
+  requestMic,
+  requestNotifications,
+} from '../permissions/permissions';
+import { requestBatteryExemption, openAutostart, openAppLocationSettings } from '../permissions/autoSetup';
+import { markOnboarded, saveConsent } from '../onboarding/consent';
+import { runTestVisit } from '../onboarding/testVisit';
+import { C, T } from '../ui/theme';
+import { Card, GradientButton } from '../ui/components';
+import { LanguagePicker } from '../ui/LanguagePicker';
+import { useT } from '../i18n';
+
+interface Extra {
+  session: Session;
+  onDone: () => void;
+}
+
+type StepId =
+  | 'language'
+  | 'consent'
+  | 'mic'
+  | 'location'
+  | 'notifications'
+  | 'battery'
+  | 'bluetooth'
+  | 'test';
+
+export default function OnboardingScreen({ navigation, route, session, onDone }: Props<'Onboarding'> & Extra) {
+  const { t } = useT();
+  const mode = route.params?.mode ?? 'first-run';
+  const steps: StepId[] = useMemo(
+    () =>
+      mode === 'repair'
+        ? ['mic', 'location', 'notifications', 'battery']
+        : ['language', 'consent', 'mic', 'location', 'notifications', 'battery', 'bluetooth', 'test'],
+    [mode],
+  );
+  const [i, setI] = useState(0);
+  const [pre, setPre] = useState<PreconditionStatus | null>(null);
+  const [batteryDone, setBatteryDone] = useState(false);
+  const [testState, setTestState] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle');
+  const [working, setWorking] = useState(false);
+
+  const refresh = async () => setPre(await checkPreconditions());
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  // Re-check permissions whenever the user comes back from the OS settings page
+  // (that's how "Allow all the time" gets granted on Android 11+).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') refresh();
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Back (header arrow OR hardware button) goes ONE step back, not out of the
+  // whole wizard. Only step 1 actually leaves the screen.
+  const iRef = useRef(0);
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e: { preventDefault: () => void }) => {
+      if (iRef.current > 0) {
+        e.preventDefault();
+        setI((x) => Math.max(0, x - 1));
+      }
+    });
+    return unsub;
+  }, [navigation]);
+
+  const step = steps[i];
+  iRef.current = i;
+  const next = () => (i < steps.length - 1 ? setI(i + 1) : finish());
+  const finish = async () => {
+    await markOnboarded();
+    onDone();
+    iRef.current = 0; // done — let the goBack below actually leave the wizard
+    navigation.goBack();
+  };
+  const doRequest = async (fn: () => Promise<boolean>) => {
+    setWorking(true);
+    await fn();
+    await refresh();
+    setWorking(false);
+  };
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.prog}>
+        {steps.map((_, idx) => (
+          <View key={idx} style={[styles.progBar, idx <= i && styles.progOn]} />
+        ))}
+      </View>
+
+      <Card style={styles.card}>
+        {step === 'language' && (
+          <>
+            <Text style={styles.title}>{t('chooseLanguage')}</Text>
+            <View style={{ height: 10 }} />
+            <LanguagePicker size="lg" />
+            <View style={{ height: 24 }} />
+            <GradientButton label={t('next')} onPress={next} />
+          </>
+        )}
+
+        {step === 'consent' && (
+          <>
+            <Text style={styles.title}>{t('obWelcomeTitle')}</Text>
+            <Text style={styles.body}>{t('obWelcomeBody')}</Text>
+            <GradientButton
+              label={t('obAgree')}
+              onPress={async () => {
+                await saveConsent();
+                next();
+              }}
+            />
+          </>
+        )}
+
+        {step === 'mic' && (
+          <>
+            <Text style={styles.title}>{t('obMicTitle')}</Text>
+            <Text style={styles.body}>{t('obMicBody')}</Text>
+            <StatusLine ok={!!pre?.mic} label={t('obMicStatus')} />
+            <GradientButton
+              label={pre?.mic ? t('done') : t('obAllowMic')}
+              onPress={pre?.mic ? next : () => doRequest(requestMic)}
+              busy={working}
+            />
+          </>
+        )}
+
+        {step === 'location' && (
+          <>
+            <Text style={styles.title}>{t('obLocTitle')}</Text>
+            <StatusLine ok={!!pre?.locationAlways} label={t('obLocStatus')} />
+            {pre?.locationAlways ? (
+              // Fully granted → move on.
+              <GradientButton label={t('done')} onPress={next} />
+            ) : !pre?.locationWhenInUse ? (
+              // Step 1: get the foreground dialog (this always shows a pop-up).
+              <>
+                <Text style={styles.body}>{t('obLocBody')}</Text>
+                <GradientButton
+                  label={t('obAllowLoc')}
+                  onPress={() => doRequest(requestLocationForeground)}
+                  busy={working}
+                />
+              </>
+            ) : (
+              // Step 2: "all the time". Try the dialog (Android 10); if it can't
+              // grant (Android 11+), open the settings page for a manual pick.
+              <>
+                <Text style={styles.body}>{t('obLocStep2Body')}</Text>
+                <GradientButton
+                  label={t('obLocAllTime')}
+                  busy={working}
+                  onPress={async () => {
+                    setWorking(true);
+                    const ok = await requestLocationBackground();
+                    await refresh();
+                    setWorking(false);
+                    if (!ok) await openAppLocationSettings();
+                  }}
+                />
+                <GradientButton
+                  label={t('obLocOpenSettings')}
+                  variant="ghost"
+                  onPress={() => openAppLocationSettings()}
+                  style={{ marginTop: 12 }}
+                />
+              </>
+            )}
+            {!pre?.gps && <Text style={styles.warn}>{t('obGpsOff')}</Text>}
+          </>
+        )}
+
+        {step === 'notifications' && (
+          <>
+            <Text style={styles.title}>{t('obNotifTitle')}</Text>
+            <Text style={styles.body}>{t('obNotifBody')}</Text>
+            <StatusLine ok={!!pre?.notifications} label={t('obNotifStatus')} />
+            <GradientButton
+              label={pre?.notifications ? t('done') : t('obAllowNotif')}
+              onPress={pre?.notifications ? next : () => doRequest(requestNotifications)}
+              busy={working}
+            />
+          </>
+        )}
+
+        {step === 'battery' && (
+          <>
+            <Text style={styles.title}>{t('obBatteryTitle')}</Text>
+            <Text style={styles.body}>{t('obBatteryBody')}</Text>
+            {/* One tap: the app fires the system "allow background" dialog itself. */}
+            <GradientButton
+              label={batteryDone ? t('obBatteryDone') : t('obBatteryOneTap')}
+              onPress={async () => {
+                await requestBatteryExemption();
+                setBatteryDone(true);
+              }}
+            />
+            <Text style={[styles.body, { marginTop: 18 }]}>{t('obAutostartBody')}</Text>
+            <GradientButton label={t('obOpenAutostart')} variant="ghost" onPress={() => openAutostart()} />
+            <GradientButton label={t('next')} onPress={next} disabled={!batteryDone} style={{ marginTop: 12 }} />
+          </>
+        )}
+
+        {step === 'bluetooth' && (
+          <>
+            <Text style={styles.title}>{t('obBtTitle')}</Text>
+            <Text style={styles.body}>{t('obBtBody')}</Text>
+            <GradientButton label={t('next')} onPress={next} />
+          </>
+        )}
+
+        {step === 'test' && (
+          <>
+            <Text style={styles.title}>{t('obTestTitle')}</Text>
+            <Text style={styles.body}>{t('obTestBody')}</Text>
+            {testState === 'ok' && <Text style={styles.okTxt}>{t('obTestSuccess')}</Text>}
+            {testState === 'fail' && <Text style={styles.warn}>{t('obTestFail')}</Text>}
+            {testState === 'running' ? (
+              <View style={styles.running}>
+                <ActivityIndicator color={C.cobalt} />
+                <Text style={styles.runningTxt}>{t('obTestRecording')}</Text>
+              </View>
+            ) : testState === 'ok' ? (
+              <GradientButton label={t('obFinish')} onPress={finish} />
+            ) : (
+              <GradientButton
+                label={t('obStartTest')}
+                onPress={async () => {
+                  setTestState('running');
+                  try {
+                    setTestState((await runTestVisit(session)) ? 'ok' : 'fail');
+                  } catch {
+                    setTestState('fail');
+                  }
+                }}
+              />
+            )}
+          </>
+        )}
+      </Card>
+    </ScrollView>
+  );
+}
+
+function StatusLine({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <View style={styles.status}>
+      <View style={[styles.statusBox, ok && styles.statusBoxOk]}>
+        {ok && (
+          <Svg width={12} height={12} viewBox="0 0 24 24">
+            <Path d="M5 13l4 4L19 7" stroke="#fff" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
+        )}
+      </View>
+      <Text style={[styles.statusTxt, ok && { color: C.ok }]}>{label}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  content: { padding: 20, paddingTop: 52 },
+  prog: { flexDirection: 'row', gap: 5, marginBottom: 20 },
+  progBar: { height: 4, flex: 1, borderRadius: 4, backgroundColor: C.line },
+  progOn: { backgroundColor: C.cobalt },
+  card: { padding: 22, gap: 4 },
+  title: { ...T.h1, fontSize: 21, marginBottom: 8 },
+  body: { ...T.body, color: C.mid, lineHeight: 22, marginBottom: 14 },
+  warn: { color: C.waitText, fontSize: 14, marginTop: 12, lineHeight: 20 },
+  okTxt: { color: C.ok, fontSize: 17, fontWeight: '700', marginBottom: 12 },
+  running: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 12 },
+  runningTxt: { ...T.body, fontWeight: '600' },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 14 },
+  statusBox: { width: 22, height: 22, borderRadius: 7, borderWidth: 1.6, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  statusBoxOk: { backgroundColor: C.ok, borderColor: C.ok },
+  statusTxt: { ...T.body, fontWeight: '600', color: C.mid },
+});

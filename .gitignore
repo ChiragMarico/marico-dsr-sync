@@ -39,3 +39,10 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# secrets — real AWS keys live here, NEVER commit (use s3Config.example.ts)
+src/config/s3Config.ts
+
+# one-off / scratch scripts
+_*.ts
+_*.js
