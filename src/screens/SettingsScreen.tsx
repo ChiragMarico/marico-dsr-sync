@@ -29,6 +29,10 @@ interface Extra {
 
 export default function SettingsScreen({ navigation, session, onLoggedOut }: Props<'Settings'> & Extra) {
   const { t } = useT();
+  // Built-in dev/admin accounts authenticate through the in-process mock and
+  // get `mock-token-<id>`; real DSRs from S3 get `s3-<id>`. Only the former
+  // may reach recordings playback and the testing tools.
+  const isAdmin = session.token.startsWith('mock-token-');
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -102,9 +106,17 @@ export default function SettingsScreen({ navigation, session, onLoggedOut }: Pro
       <Row label={t('refreshOutlets')} onPress={refreshOutlets} busy={syncing} />
       <Row label={t('redoSetup')} onPress={() => navigation.navigate('Onboarding', { mode: 'first-run' })} />
       <Row label={`⬇️  ${t('checkUpdates')}`} onPress={checkForUpdates} busy={checking} />
-      <Row label={`🎧  ${t('recordings')}`} onPress={() => navigation.navigate('Recordings')} />
       <Row label={t('openPhoneSettings')} onPress={() => Linking.openSettings()} />
-      <Row label="🛠  Developer / Testing" onPress={() => navigation.navigate('DevTools')} />
+
+      {/* Admin-only. Field reps must not be able to play back or delete their
+          own recordings — that is a Marico-side function. Dev accounts
+          (1023/1024) keep both so testing tools stay usable. */}
+      {isAdmin && (
+        <>
+          <Row label={`🎧  ${t('recordings')}`} onPress={() => navigation.navigate('Recordings')} />
+          <Row label="🛠  Developer / Testing" onPress={() => navigation.navigate('DevTools')} />
+        </>
+      )}
 
       <Card style={styles.verCard}>
         <Text style={styles.verK}>{t('version')}</Text>
