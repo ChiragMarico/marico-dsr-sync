@@ -30,6 +30,18 @@ vLLM serves only transformer LLMs (Qwen, Whisper). pyannote, IndicConformer and
 IndicTrans2 need their own container. See `START-HERE.md` section 4.
 
 **Blocker:** `nvidia-smi` on the GPU server — we need ~20 GB free VRAM.
+Get it via JupyterLab: `+` → Launcher → **Terminal** (no SSH needed).
+
+## Database: Snowflake only — no Postgres
+
+Decided. Snowflake is a warehouse, not an operational DB, so four rules apply
+(detail in `START-HERE.md` §4):
+1. Never put Snowflake in the rep's latency path — the app reads config JSON
+   from Blob and caches locally, as it does today.
+2. **Batch every write.** Never insert one row per visit.
+3. **Enforce integrity in FastAPI** — Snowflake does not enforce keys. Use
+   `MERGE` so retries cannot double-insert.
+4. X-Small warehouse, 60s auto-suspend.
 
 ## Two workstreams
 

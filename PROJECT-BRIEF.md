@@ -63,11 +63,10 @@ Adding Bengali + Gujarati + Kannada + Odia → ~92% coverage.
 ## 3. Target architecture
 
 ```
-📱 App → 🧠 FastAPI → 🐘 Postgres          (live, fast, per-visit)
+📱 App → 🧠 FastAPI → ❄️ Snowflake        (batched writes — see START-HERE §4)
               │              │
-              ├→ ☁️ Blob      │ nightly
-              │              ▼
-              │        ❄️ Snowflake  → joins to EXISTING sales data
+              ├→ ☁️ Blob      └→ joins to EXISTING sales data
+              │
               ▼
         📋 Queue → 🖥️ AI workers (self-hosted, open source)
                      ├ IndicConformer  → transcript
@@ -84,7 +83,7 @@ Adding Bengali + Gujarati + Kannada + Odia → ~92% coverage.
 | Layer | Choice | Why |
 |---|---|---|
 | API | **FastAPI** (Python) | Same language as the AI pipeline — one skill set, not two |
-| DB | **PostgreSQL** | Free, enforces integrity, ~1ms queries. Snowflake is OLAP and would cost ~₹1.5L/mo as an app DB |
+| DB | **Snowflake only** | Decision: no separate operational DB. Requires batched writes + integrity enforced in the API — see START-HERE.md §4 |
 | Analytics | **Snowflake** (existing) | Where sales data already lives — the real value is the join |
 | Storage | **Azure Blob** | 2 TB hot + 5 TB archive already purchased |
 | Queue | Celery + Redis (or Azure Service Bus) | Slow AI work must never block the app |
@@ -100,7 +99,10 @@ Adding Bengali + Gujarati + Kannada + Odia → ~92% coverage.
 - **T4 GPUs over A100** — ~$0.053/audio-hour vs ~$0.105. Price falls faster
   than throughput. Spot VMs cut this ~70% since transcription is
   interruption-tolerant batch work.
-- **Postgres + Snowflake, not either/or** — till vs library.
+- **Snowflake as the sole database** — avoids running a second database and
+  puts insights directly beside sales data. Cost of this choice: writes must be
+  batched, and referential integrity becomes the API's responsibility because
+  Snowflake does not enforce keys.
 - **Dual-channel capture** — the issued Bluetooth mic on the rep + phone mic on
   the room gives acoustic speaker separation *before* any model runs. Highest
   leverage idea available, no new hardware spend.
@@ -135,7 +137,7 @@ in hand. Inventory those servers first (read-only commands in section 7).
 
 ### Phase 0 — Foundation (weeks 1–4)
 - FastAPI backend: auth, short-lived scoped upload URLs, data access
-- Postgres schema + migrations
+- Snowflake schema + batched-write helpers
 - Remove the embedded key from the app entirely
 - Monitoring/reconciliation: expected vs received recordings per DSR per day
 - Audio profile → 16 kHz mono
