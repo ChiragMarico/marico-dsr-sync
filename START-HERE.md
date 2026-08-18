@@ -29,9 +29,9 @@ spend** (everything self-hosted open source).
 ### Confirmed
 | Item | Detail |
 |---|---|
-| **devops5** | `10.124.10.11` — **48 CPU cores**. GPU status TBD (`nvidia-smi` output not yet captured) |
-| **GPU nodes** | 2 nodes, both with GPUs. One reported **48 GB VRAM** |
-| **Already running** | **vLLM** (model serving) and **Jupyter** (data science experiments) |
+| **GPU server** | **The only GPU box.** Runs JupyterLab (data science team). Reported ~48 GB VRAM. **Everything we build runs here.** |
+| **Already running** | **JupyterLab** — their team's interactive work. Do not disturb it. |
+| ~~devops5~~ | ~~`10.124.10.11`, 48 cores, no GPU~~ — **dropped, not considered reliable.** Do not plan around it. |
 | **Cloud** | Azure — Central India preferred. Blob storage purchased: **2 TB hot + 5 TB archive** |
 | **Warehouse** | Snowflake — already holds Marico sales data |
 | **Access** | SSH as `admchiragt@10.124.10.11`. From outside the corporate network requires **Zscaler ZPA** (ITSD ticket) |
@@ -42,11 +42,20 @@ agent, coconut tagging, counterfeit detection, two internal apps. **Sync is not
 in that list and those machines have no GPU.** Don't assume our workload fits
 there.
 
-### Still unknown — get these first
-- `nvidia-smi` output: GPU model, total VRAM, **how much is free**
-- Is vLLM running as a persistent server (`vllm serve`) or imported in notebooks?
-- Who owns the GPU nodes / who approves deploying a container there
-- Is usage constant, or idle overnight? (our transcription is overnight batch)
+### Still unknown — THE blocker
+Run this **on the GPU server** and record the output:
+```bash
+nvidia-smi
+```
+It answers all of these at once:
+- GPU model and total VRAM
+- **How much VRAM is free** — we need ~20 GB
+- Which processes hold memory today
+
+Then confirm with its owner:
+- Who approves running a container there
+- Is usage constant, or quiet overnight?
+- What VRAM budget may we rely on?
 
 ---
 
@@ -86,13 +95,25 @@ container. Both share the same GPU — separate processes, no interference.
 | pyannote | Speaker separation | ❌ own container |
 | IndicTrans2 | Indic → English | ❌ own container |
 
-**Target deployment on the GPU node:**
+**Target deployment — one GPU server, everything on it:**
 ```
-🖥️  GPU NODE
-     ├── 📓 Jupyter        ← their team (already there, leave alone)
-     ├── ⚙️  vLLM           ← Qwen2.5 for insights        (we add)
-     └── 🐍 Worker         ← pyannote / translation / ASR (we add)
+🖥️  GPU SERVER (~48 GB VRAM)
+     ├── 📓 JupyterLab     ← their team (leave alone)
+     ├── ⚙️  vLLM           ← Qwen2.5 for insights        (we add, VRAM-capped)
+     └── 🐍 Worker         ← ASR / pyannote / translation (we add)
 ```
+
+**Be a good neighbour.** Always cap our GPU memory so their Jupyter work can
+never be starved by us:
+```bash
+docker run --gpus all vllm/vllm-openai \
+  --model Qwen/Qwen2.5-14B-Instruct-AWQ \
+  --gpu-memory-utilization 0.30      # never exceed 30% of the card
+```
+
+**If VRAM is tight**, in order of preference: Qwen2.5-7B instead of 14B
+(9 GB -> 5 GB), Whisper medium instead of large-v3, or load models in stages
+rather than keeping all resident. None of these block a pilot.
 
 ### VRAM budget (48 GB card)
 ```
@@ -118,13 +139,16 @@ config line, not an architectural commitment.
 
 Assumes 30 visits/rep/day × ~3 min.
 
-| Scale | Audio/day | On a 48 GB GPU | On 48 CPU cores |
-|---|---|---|---|
-| 100 reps | ~150 hrs | ~5–8 hrs ✅ | ~8–12 hrs ✅ overnight |
-| 300 reps | ~450 hrs | ~15–22 hrs ⚠️ | ✗ |
-| 2,392 reps (national) | ~3,600 hrs | needs a pool | ✗ |
+| Scale | Audio/day | On the 48 GB GPU |
+|---|---|---|
+| 100 reps | ~150 hrs | ~4–8 hrs ✅ comfortably overnight |
+| 300 reps | ~450 hrs | ~12–22 hrs ⚠️ tight |
+| 2,392 reps (national) | ~3,600 hrs | ✗ needs a GPU pool |
 
-**A 100-rep pilot fits comfortably on existing hardware — GPU or even CPU-only.**
+**A 100-rep pilot fits comfortably on the single GPU server.**
+
+⚠️ **Single point of failure.** One machine, shared with the data science team.
+Agree a VRAM budget with its owner up front, and always run capped.
 
 Storage at 16 kHz mono ≈ 14.4 MB per audio-hour → ~52 GB/day national.
 2 TB hot ≈ 39 days, 7 TB total ≈ 4.5 months.

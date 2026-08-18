@@ -16,17 +16,20 @@ platform does not exist yet. This repo currently contains only the mobile app.
 
 Scale target: **2,392 DSRs, 554,435 outlets** across India.
 
-## Infrastructure that already exists at Marico
+## Infrastructure at Marico
 
-- **GPU nodes (2)** running **vLLM** + **Jupyter** — one reported 48 GB VRAM
-- **devops5** `10.124.10.11` — 48 CPU cores (GPU status TBD)
+- **ONE GPU server** (~48 GB VRAM) running **JupyterLab** for the data science
+  team. **Everything we build runs here.** Deploy as containers alongside their
+  Jupyter — never disturb it, always cap GPU memory
+  (`--gpu-memory-utilization 0.30`).
 - **Azure Blob** purchased: 2 TB hot + 5 TB archive
 - **Snowflake** — already holds Marico sales data
-- 7-8 additional Linux servers
+- ~~devops5 (48 cores, no GPU)~~ — **dropped, not reliable. Do not plan around it.**
 
-Deploy our own containers on the GPU node; do not touch their Jupyter setup.
-vLLM serves only transformer LLMs (Qwen, Whisper) — pyannote, IndicConformer
-and IndicTrans2 need their own container. See `START-HERE.md` section 4.
+vLLM serves only transformer LLMs (Qwen, Whisper). pyannote, IndicConformer and
+IndicTrans2 need their own container. See `START-HERE.md` section 4.
+
+**Blocker:** `nvidia-smi` on the GPU server — we need ~20 GB free VRAM.
 
 ## Two workstreams
 
