@@ -1,7 +1,8 @@
 # Sync — Marico Field Voice Capture & Speech Analytics
 
-> Auto-loaded context. Read `PROJECT-BRIEF.md` for the full plan and history.
-> Expo specifics: see `AGENTS.md`. Architecture/traps: `DEVELOPER-GUIDE.md`.
+> Auto-loaded context. **Read `START-HERE.md` first** — infrastructure, access
+> and the immediate build order. Then `PROJECT-BRIEF.md` for full history.
+> Expo specifics: `AGENTS.md`. Mobile app internals: `DEVELOPER-GUIDE.md`.
 
 ## What this is
 
@@ -14,6 +15,18 @@ separation, AI insight extraction, and a **manager web dashboard**. That
 platform does not exist yet. This repo currently contains only the mobile app.
 
 Scale target: **2,392 DSRs, 554,435 outlets** across India.
+
+## Infrastructure that already exists at Marico
+
+- **GPU nodes (2)** running **vLLM** + **Jupyter** — one reported 48 GB VRAM
+- **devops5** `10.124.10.11` — 48 CPU cores (GPU status TBD)
+- **Azure Blob** purchased: 2 TB hot + 5 TB archive
+- **Snowflake** — already holds Marico sales data
+- 7-8 additional Linux servers
+
+Deploy our own containers on the GPU node; do not touch their Jupyter setup.
+vLLM serves only transformer LLMs (Qwen, Whisper) — pyannote, IndicConformer
+and IndicTrans2 need their own container. See `START-HERE.md` section 4.
 
 ## Two workstreams
 
