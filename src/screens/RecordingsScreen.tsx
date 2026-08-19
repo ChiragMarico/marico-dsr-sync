@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -104,42 +103,6 @@ export default function RecordingsScreen(_props: Props<'Recordings'>) {
     }
   };
 
-  const deleteKeys = async (keys: string[]) => {
-    let ok = 0;
-    for (const key of keys) {
-      try {
-        const res = await fetch(presignFullKey(key, 'DELETE'), { method: 'DELETE' });
-        if (res.ok || res.status === 204) ok++;
-      } catch {
-        /* skip; will remain in list */
-      }
-    }
-    if (playingKey && keys.includes(playingKey)) {
-      try {
-        playerRef.current?.pause();
-      } catch {
-        /* noop */
-      }
-      setPlayingKey(null);
-    }
-    setItems((prev) => prev.filter((o) => !keys.includes(o.key)));
-    if (ok < keys.length) setError(t('recDeleteSomeFail'));
-  };
-
-  const confirmDelete = (item: S3Object) => {
-    Alert.alert(t('recDeleteOneQ'), label(item.key).title, [
-      { text: t('cancel'), style: 'cancel' },
-      { text: t('delete'), style: 'destructive', onPress: () => deleteKeys([item.key]) },
-    ]);
-  };
-
-  const confirmDeleteAll = () => {
-    Alert.alert(t('recDeleteAllQ'), t('recDeleteAllBody', { n: items.length }), [
-      { text: t('cancel'), style: 'cancel' },
-      { text: t('deleteAll'), style: 'destructive', onPress: () => deleteKeys(items.map((o) => o.key)) },
-    ]);
-  };
-
   if (loading) {
     return (
       <View style={styles.center}>
@@ -159,9 +122,6 @@ export default function RecordingsScreen(_props: Props<'Recordings'>) {
           items.length > 0 ? (
             <View style={styles.headerRow}>
               <Text style={styles.head}>{t('recCountHeader', { n: items.length })}</Text>
-              <TouchableOpacity onPress={confirmDeleteAll} hitSlop={8}>
-                <Text style={styles.deleteAll}>{t('deleteAll')}</Text>
-              </TouchableOpacity>
             </View>
           ) : null
         }
@@ -187,9 +147,6 @@ export default function RecordingsScreen(_props: Props<'Recordings'>) {
                   {isPlayingNow ? `❚❚ ${t('recPause')}` : isActive ? `▶ ${t('recResume')}` : `▶ ${t('recPlay')}`}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.trash} onPress={() => confirmDelete(item)} hitSlop={8}>
-                <Text style={styles.trashTxt}>🗑</Text>
-              </TouchableOpacity>
             </Card>
           );
         }}
@@ -204,7 +161,6 @@ const styles = StyleSheet.create({
   list: { padding: 16 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   head: { ...T.label },
-  deleteAll: { color: C.rec, fontWeight: '800', fontSize: 13 },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
   title: { ...T.h2, fontSize: 14 },
   sub: { ...T.caption, marginTop: 2 },
@@ -219,8 +175,6 @@ const styles = StyleSheet.create({
   },
   playing: { backgroundColor: C.cobalt },
   playTxt: { color: C.cobalt, fontWeight: '800', fontSize: 13 },
-  trash: { padding: 6 },
-  trashTxt: { fontSize: 18 },
   emptyWrap: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
   empty: { ...T.body, color: C.low, textAlign: 'center', lineHeight: 22 },
 });
