@@ -9,6 +9,7 @@ import { C, R, SHADOW, T } from '../ui/theme';
 import { Card, GradientButton } from '../ui/components';
 import { EXIT_RADIUS_M } from '../constants';
 import { runSelfTest, SelfTestCycle } from '../dev/selfTest';
+import { runVoiceEnrollment, ENROLL_SECONDS } from '../onboarding/voiceEnrollment';
 
 interface Extra {
   session: Session;
@@ -29,6 +30,32 @@ export default function DevToolsScreen({ session }: Props<'DevTools'> & Extra) {
   const [stRunning, setStRunning] = useState(false);
   const [stMsg, setStMsg] = useState('');
   const [stResult, setStResult] = useState<SelfTestCycle[] | null>(null);
+  // Voice enrollment can be re-run from here without walking the whole wizard.
+  const [veState, setVeState] = useState<'idle' | 'rec' | 'up' | 'ok' | 'fail'>('idle');
+  const [veLeft, setVeLeft] = useState(ENROLL_SECONDS);
+  const [veMsg, setVeMsg] = useState('');
+
+  const runVE = async () => {
+    setVeMsg('');
+    setVeLeft(ENROLL_SECONDS);
+    setVeState('rec');
+    try {
+      const res = await runVoiceEnrollment(session, (left) => {
+        setVeLeft(left);
+        if (left === 0) setVeState('up');
+      });
+      if (res.ok) {
+        setVeState('ok');
+        setVeMsg(`saved · ${Math.round((res.sizeBytes ?? 0) / 1024)} KB`);
+      } else {
+        setVeState('fail');
+        setVeMsg(res.error ?? 'unknown');
+      }
+    } catch (e) {
+      setVeState('fail');
+      setVeMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const runST = async () => {
     setStRunning(true);
@@ -123,6 +150,35 @@ export default function DevToolsScreen({ session }: Props<'DevTools'> & Extra) {
             </Text>
           </View>
         ))}
+      </Card>
+
+      {/* ── Voice enrollment (re-runnable) ── */}
+      <Text style={styles.sectionLabel}>Voice enrollment</Text>
+      <Card style={styles.card}>
+        <Text style={styles.cardBody}>
+          Records {ENROLL_SECONDS}s of you speaking and uploads it as this DSR's
+          voiceprint, to sync/voiceprints/{session.dsr.id}/. Re-runnable — the
+          newest one wins.
+        </Text>
+        <GradientButton
+          label={
+            veState === 'rec'
+              ? `Speak now — ${veLeft}s`
+              : veState === 'up'
+                ? 'Uploading…'
+                : veState === 'ok'
+                  ? 'Record again'
+                  : 'Record voiceprint'
+          }
+          onPress={runVE}
+          busy={veState === 'rec' || veState === 'up'}
+        />
+        {veMsg !== '' && (
+          <Text style={[styles.stTxt, { color: veState === 'ok' ? C.ok : C.rec }]}>
+            {veState === 'ok' ? '✓ ' : '✗ '}
+            {veMsg}
+          </Text>
+        )}
       </Card>
 
       {/* ── Primary: real walk-around test ── */}

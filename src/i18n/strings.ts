@@ -127,6 +127,19 @@ export const en = {
   obBtBody:
     'Pair the provided Bluetooth mic in your phone’s Bluetooth settings. Once paired, the app uses it automatically. If it runs out of battery, the app falls back to the phone mic.',
 
+  // voice enrollment (replaces the old silent test recording)
+  veTitle: 'Record Your Voice',
+  veBody: 'Read the sentence below out loud. This teaches the app your voice, so it can tell which speaker is you in your visit recordings.',
+  veScript: 'My name is {name}. I visit shops every day for Marico. Today I will record my conversations with shopkeepers.',
+  veStart: 'Start Recording',
+  veRecording: 'Speak now — keep reading',
+  veSecondsLeft: '{s} seconds left',
+  veUploading: 'Uploading…',
+  veSuccess: '✓ Your voice has been saved',
+  veFailed: 'Could not save your voice: {e}',
+  veRetry: 'Try Again',
+  veWhy: 'Recorded once. You will not be asked again.',
+
   // test
   obTestTitle: 'Test Recording',
   obTestBody: 'A 10-second test that uploads to the server, to prove everything works before day one.',

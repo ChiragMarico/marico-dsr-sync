@@ -13,7 +13,7 @@ import {
 } from '../permissions/permissions';
 import { requestBatteryExemption, openAutostart, openAppLocationSettings } from '../permissions/autoSetup';
 import { markOnboarded, saveConsent } from '../onboarding/consent';
-import { runTestVisit } from '../onboarding/testVisit';
+import { runVoiceEnrollment, ENROLL_SECONDS } from '../onboarding/voiceEnrollment';
 import { C, T } from '../ui/theme';
 import { Card, GradientButton } from '../ui/components';
 import { LanguagePicker } from '../ui/LanguagePicker';
@@ -32,7 +32,7 @@ type StepId =
   | 'notifications'
   | 'battery'
   | 'bluetooth'
-  | 'test';
+  | 'voice';
 
 export default function OnboardingScreen({ navigation, route, session, onDone }: Props<'Onboarding'> & Extra) {
   const { t } = useT();
@@ -41,13 +41,17 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
     () =>
       mode === 'repair'
         ? ['mic', 'location', 'notifications', 'battery']
-        : ['language', 'consent', 'mic', 'location', 'notifications', 'battery', 'bluetooth', 'test'],
+        : ['language', 'consent', 'mic', 'location', 'notifications', 'battery', 'bluetooth', 'voice'],
     [mode],
   );
   const [i, setI] = useState(0);
   const [pre, setPre] = useState<PreconditionStatus | null>(null);
   const [batteryDone, setBatteryDone] = useState(false);
-  const [testState, setTestState] = useState<'idle' | 'running' | 'ok' | 'fail'>('idle');
+  const [testState, setTestState] = useState<'idle' | 'running' | 'uploading' | 'ok' | 'fail'>('idle');
+  // Seconds remaining while the rep reads the prompt — without a visible
+  // countdown they stop talking after a few seconds and the sample is unusable.
+  const [secsLeft, setSecsLeft] = useState(ENROLL_SECONDS);
+  const [veError, setVeError] = useState('');
   const [working, setWorking] = useState(false);
 
   const refresh = async () => setPre(await checkPreconditions());
@@ -223,31 +227,64 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
           </>
         )}
 
-        {step === 'test' && (
+        {step === 'voice' && (
           <>
-            <Text style={styles.title}>{t('obTestTitle')}</Text>
-            <Text style={styles.body}>{t('obTestBody')}</Text>
-            {testState === 'ok' && <Text style={styles.okTxt}>{t('obTestSuccess')}</Text>}
-            {testState === 'fail' && <Text style={styles.warn}>{t('obTestFail')}</Text>}
+            <Text style={styles.title}>{t('veTitle')}</Text>
+            <Text style={styles.body}>{t('veBody')}</Text>
+
+            {/* The line the rep reads aloud. Large and high-contrast because
+                they are reading it while holding the phone at arm's length. */}
+            <View style={styles.scriptBox}>
+              <Text style={styles.scriptTxt}>
+                {t('veScript', { name: session.dsr.name })}
+              </Text>
+            </View>
+
+            {testState === 'ok' && <Text style={styles.okTxt}>{t('veSuccess')}</Text>}
+            {testState === 'fail' && (
+              <Text style={styles.warn}>{t('veFailed', { e: veError })}</Text>
+            )}
+
             {testState === 'running' ? (
+              <View style={styles.recBox}>
+                <Text style={styles.recNow}>{t('veRecording')}</Text>
+                <Text style={styles.recCount}>{t('veSecondsLeft', { s: secsLeft })}</Text>
+              </View>
+            ) : testState === 'uploading' ? (
               <View style={styles.running}>
                 <ActivityIndicator color={C.cobalt} />
-                <Text style={styles.runningTxt}>{t('obTestRecording')}</Text>
+                <Text style={styles.runningTxt}>{t('veUploading')}</Text>
               </View>
             ) : testState === 'ok' ? (
               <GradientButton label={t('obFinish')} onPress={finish} />
             ) : (
-              <GradientButton
-                label={t('obStartTest')}
-                onPress={async () => {
-                  setTestState('running');
-                  try {
-                    setTestState((await runTestVisit(session)) ? 'ok' : 'fail');
-                  } catch {
-                    setTestState('fail');
-                  }
-                }}
-              />
+              <>
+                <GradientButton
+                  label={testState === 'fail' ? t('veRetry') : t('veStart')}
+                  onPress={async () => {
+                    setVeError('');
+                    setSecsLeft(ENROLL_SECONDS);
+                    setTestState('running');
+                    try {
+                      const res = await runVoiceEnrollment(session, (left) => {
+                        setSecsLeft(left);
+                        // Recording is done; the remaining wait is the upload.
+                        if (left === 0) setTestState('uploading');
+                      });
+                      if (res.ok) {
+                        setTestState('ok');
+                      } else {
+                        setVeError(res.error ?? 'unknown');
+                        setTestState('fail');
+                      }
+                    } catch (e) {
+                      setVeError(e instanceof Error ? e.message : String(e));
+                      setTestState('fail');
+                    }
+                  }}
+                />
+                <Text style={styles.veWhy}>{t('veWhy')}</Text>
+              </>
             )}
           </>
         )}
@@ -284,6 +321,25 @@ const styles = StyleSheet.create({
   okTxt: { color: C.ok, fontSize: 17, fontWeight: '700', marginBottom: 12 },
   running: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 12 },
   runningTxt: { ...T.body, fontWeight: '600' },
+  scriptBox: {
+    backgroundColor: 'rgba(28,90,168,0.07)',
+    borderLeftWidth: 3,
+    borderLeftColor: C.cobalt,
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 18,
+  },
+  scriptTxt: { ...T.body, fontSize: 19, lineHeight: 29, fontWeight: '600', color: C.ink },
+  recBox: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    backgroundColor: 'rgba(255,90,77,0.08)',
+    borderRadius: 12,
+    marginBottom: 14,
+  },
+  recNow: { ...T.body, fontSize: 17, fontWeight: '700', color: C.rec },
+  recCount: { fontSize: 34, fontWeight: '800', color: C.rec, marginTop: 6, fontVariant: ['tabular-nums'] },
+  veWhy: { ...T.caption, fontSize: 13, textAlign: 'center', marginTop: 12 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 14 },
   statusBox: { width: 22, height: 22, borderRadius: 7, borderWidth: 1.6, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
   statusBoxOk: { backgroundColor: C.ok, borderColor: C.ok },
