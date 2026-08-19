@@ -114,6 +114,7 @@ export default function SettingsScreen({ navigation, session, onLoggedOut }: Pro
       {isAdmin && (
         <>
           <Row label={`🎧  ${t('recordings')}`} onPress={() => navigation.navigate('Recordings')} />
+          <Row label={`🎤  ${t('vpTitle')}`} onPress={() => navigation.navigate('Voiceprints')} />
           <Row label="🛠  Developer / Testing" onPress={() => navigation.navigate('DevTools')} />
         </>
       )}

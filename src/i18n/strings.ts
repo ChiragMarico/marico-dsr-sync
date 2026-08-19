@@ -149,6 +149,20 @@ export const en = {
   obStartTest: 'Start Test',
   obFinish: 'Finish',
 
+  // ── Forced update (blocking) ──
+  fuTitle: 'Update Required',
+  fuBody: 'A new version of Sync is needed to keep recording your visits. Please install it to continue.',
+  fuYourVersion: 'Your version: {v}',
+  fuNeeded: 'Required: {v}',
+  fuDownload: 'Download Update',
+  fuHelp: 'After downloading, tap the file to install. Ask your supervisor if you need help.',
+
+  // ── Voiceprints (admin) ──
+  vpTitle: 'Voiceprints',
+  vpEnrolled: '{n} enrolled',
+  vpNone: 'No voiceprints yet.\nComplete voice enrollment in Setup.',
+  vpRecorded: 'Recorded {d}',
+
   // ── Settings ──
   checkUpdates: 'Check for Updates',
   recordings: 'Recordings',

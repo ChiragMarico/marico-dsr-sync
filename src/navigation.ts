@@ -7,6 +7,7 @@ export type RootStackParamList = {
   Settings: undefined;
   DevTools: undefined;
   Recordings: undefined;
+  Voiceprints: undefined;
 };
 
 export type TabParamList = {

@@ -17,6 +17,7 @@ import VisitHistoryScreen from './src/screens/VisitHistoryScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import DevToolsScreen from './src/screens/DevToolsScreen';
 import RecordingsScreen from './src/screens/RecordingsScreen';
+import VoiceprintsScreen from './src/screens/VoiceprintsScreen';
 import { loadSession } from './src/storage/session';
 import { clearOutletCache } from './src/storage/outletCache';
 import { Session } from './src/types';
@@ -25,6 +26,8 @@ import { dutyController } from './src/duty/dutyController';
 import { configureUpload, kickUploads } from './src/upload/worker';
 import { clearDutyState, loadDutyState } from './src/duty/dutyState';
 import { logEvent } from './src/logs/daylog';
+import { checkForUpdate, UpdateStatus } from './src/update/updateCheck';
+import { ForcedUpdateScreen } from './src/screens/ForcedUpdateScreen';
 import { initLang, useT } from './src/i18n';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -78,12 +81,19 @@ export default function App() {
   const { t } = useT();
   const [booting, setBooting] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
+  // Native-version gate. Only ever set when the server positively reports the
+  // installed build is unsupported; every failure path reports "up to date".
+  const [forced, setForced] = useState<UpdateStatus | null>(null);
   const appState = useRef(AppState.currentState);
 
   // ── boot ──
   useEffect(() => {
     (async () => {
       await initLang();
+      // Runs before anything else so an unsupported build never reaches the
+      // login screen. Fails open — a network blip must not brick the fleet.
+      const up = await checkForUpdate();
+      if (up.forceUpdate) setForced(up);
       await setupNotifications();
       const s = await loadSession();
       if (s) {
@@ -126,6 +136,17 @@ export default function App() {
     );
   }
 
+  // Blocks the entire app — there is deliberately no way past this screen,
+  // because an OTA cannot fix a native change.
+  if (forced) {
+    return (
+      <>
+        <StatusBar style="dark" />
+        <ForcedUpdateScreen status={forced} />
+      </>
+    );
+  }
+
   return (
     <NavigationContainer>
       <StatusBar style="dark" />
@@ -150,6 +171,9 @@ export default function App() {
           </Stack.Screen>
           <Stack.Screen name="Recordings" options={{ title: t('recordings') }}>
             {(props) => <RecordingsScreen {...props} />}
+          </Stack.Screen>
+          <Stack.Screen name="Voiceprints" options={{ title: t('vpTitle') }}>
+            {(props) => <VoiceprintsScreen {...props} />}
           </Stack.Screen>
         </Stack.Navigator>
       ) : (
