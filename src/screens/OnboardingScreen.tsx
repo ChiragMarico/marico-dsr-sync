@@ -13,14 +13,7 @@ import {
 } from '../permissions/permissions';
 import { requestBatteryExemption, openAutostart, openAppLocationSettings } from '../permissions/autoSetup';
 import { markOnboarded, saveConsent } from '../onboarding/consent';
-import {
-  recordPassage,
-  uploadVoiceprint,
-  PASSAGE_SECONDS,
-  PASSAGE_COUNT,
-  PassageResult,
-} from '../onboarding/voiceEnrollment';
-import { StringKey } from '../i18n/strings';
+import { runVoiceEnrollment, ENROLL_SECONDS } from '../onboarding/voiceEnrollment';
 import { C, T } from '../ui/theme';
 import { Card, GradientButton } from '../ui/components';
 import { LanguagePicker } from '../ui/LanguagePicker';
@@ -57,12 +50,8 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
   const [testState, setTestState] = useState<'idle' | 'running' | 'uploading' | 'ok' | 'fail'>('idle');
   // Seconds remaining while the rep speaks — without a visible countdown they
   // stop talking after a few seconds and the sample is unusable.
-  const [secsLeft, setSecsLeft] = useState(PASSAGE_SECONDS);
+  const [secsLeft, setSecsLeft] = useState(ENROLL_SECONDS);
   const [veError, setVeError] = useState('');
-  // Which passage is on screen, and which have been captured. Recording each
-  // separately lets a rep redo just the one that went wrong.
-  const [pIdx, setPIdx] = useState(0);
-  const [done, setDone] = useState<Record<number, PassageResult>>({});
   const [working, setWorking] = useState(false);
 
   const refresh = async () => setPre(await checkPreconditions());
@@ -238,127 +227,65 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
           </>
         )}
 
-        {step === 'voice' && (() => {
-          const scripts: StringKey[] = ['veScript', 'veScript2', 'veScript3'];
-          const num = pIdx + 1;
-          const isFree = num === PASSAGE_COUNT; // last passage is unscripted
-          const captured = Object.keys(done).length;
-          const recorded = !!done[num];
+        {step === 'voice' && (
+          <>
+            <Text style={styles.title}>{t('veTitle')}</Text>
+            <Text style={styles.body}>{t('veBody')}</Text>
 
-          return (
-            <>
-              <Text style={styles.title}>{t('veTitle')}</Text>
-              <Text style={styles.body}>{t('veBody')}</Text>
+            {/* What to talk about. Large and high-contrast — the rep reads this
+                at arm's length while speaking. */}
+            <View style={styles.scriptBox}>
+              <Text style={styles.scriptTxt}>{t('veScript')}</Text>
+            </View>
 
-              <View style={styles.passHead}>
-                <Text style={styles.passOf}>
-                  {t('vePassageOf', { n: num, total: PASSAGE_COUNT })}
-                </Text>
-                <Text style={styles.passKind}>
-                  {isFree ? t('veSpeakFreely') : t('veReadAloud')}
-                </Text>
+            {testState === 'ok' && <Text style={styles.okTxt}>{t('veSuccess')}</Text>}
+            {testState === 'fail' && (
+              <Text style={styles.warn}>{t('veFailed', { e: veError })}</Text>
+            )}
+
+            {testState === 'running' ? (
+              <View style={styles.recBox}>
+                <Text style={styles.recNow}>{t('veRecording')}</Text>
+                <Text style={styles.recCount}>{t('veSecondsLeft', { s: secsLeft })}</Text>
               </View>
-
-              {/* Large and high-contrast — the rep reads this at arm's length. */}
-              <View style={[styles.scriptBox, isFree && styles.scriptBoxFree]}>
-                <Text style={styles.scriptTxt}>
-                  {t(scripts[pIdx], { name: session.dsr.name })}
-                </Text>
+            ) : testState === 'uploading' ? (
+              <View style={styles.running}>
+                <ActivityIndicator color={C.cobalt} />
+                <Text style={styles.runningTxt}>{t('veUploading')}</Text>
               </View>
-
-              {recorded && testState !== 'running' && (
-                <Text style={styles.okTxt}>{t('veDoneMark')}</Text>
-              )}
-              {testState === 'fail' && (
-                <Text style={styles.warn}>{t('veFailed', { e: veError })}</Text>
-              )}
-
-              {testState === 'running' ? (
-                <View style={styles.recBox}>
-                  <Text style={styles.recNow}>{t('veRecording')}</Text>
-                  <Text style={styles.recCount}>{t('veSecondsLeft', { s: secsLeft })}</Text>
-                </View>
-              ) : testState === 'uploading' ? (
-                <View style={styles.running}>
-                  <ActivityIndicator color={C.cobalt} />
-                  <Text style={styles.runningTxt}>{t('veUploading')}</Text>
-                </View>
-              ) : testState === 'ok' ? (
-                <>
-                  <Text style={styles.okTxt}>{t('veSuccess')}</Text>
-                  <GradientButton label={t('obFinish')} onPress={finish} />
-                </>
-              ) : (
-                <>
-                  <GradientButton
-                    label={recorded ? t('veReRecord') : t('veStart')}
-                    onPress={async () => {
-                      setVeError('');
-                      setSecsLeft(PASSAGE_SECONDS);
-                      setTestState('running');
-                      try {
-                        const res = await recordPassage(session, num, setSecsLeft);
-                        setDone((d) => ({ ...d, [num]: res }));
-                        setTestState('idle');
-                        // Move to the next unrecorded passage automatically.
-                        if (num < PASSAGE_COUNT) setPIdx(pIdx + 1);
-                      } catch (e) {
-                        setVeError(e instanceof Error ? e.message : String(e));
+            ) : testState === 'ok' ? (
+              <GradientButton label={t('obFinish')} onPress={finish} />
+            ) : (
+              <>
+                <GradientButton
+                  label={testState === 'fail' ? t('veRetry') : t('veStart')}
+                  onPress={async () => {
+                    setVeError('');
+                    setSecsLeft(ENROLL_SECONDS);
+                    setTestState('running');
+                    try {
+                      // Recording and upload are ONE action — there is no state
+                      // where the rep thinks they are done but nothing was sent.
+                      const res = await runVoiceEnrollment(session, (left) => {
+                        setSecsLeft(left);
+                        if (left === 0) setTestState('uploading');
+                      });
+                      if (res.ok) setTestState('ok');
+                      else {
+                        setVeError(res.error ?? 'unknown');
                         setTestState('fail');
                       }
-                    }}
-                  />
-
-                  <View style={styles.navRow}>
-                    <GradientButton
-                      label={t('vePrev')}
-                      variant="ghost"
-                      disabled={pIdx === 0}
-                      onPress={() => setPIdx(Math.max(0, pIdx - 1))}
-                      style={styles.navBtn}
-                    />
-                    <GradientButton
-                      label={t('veNext')}
-                      variant="ghost"
-                      disabled={pIdx >= PASSAGE_COUNT - 1}
-                      onPress={() => setPIdx(Math.min(PASSAGE_COUNT - 1, pIdx + 1))}
-                      style={styles.navBtn}
-                    />
-                  </View>
-
-                  <Text style={styles.veWhy}>
-                    {t('veProgress', { n: captured, total: PASSAGE_COUNT })}
-                  </Text>
-
-                  {/* Only offer to save once every passage is captured. */}
-                  {captured === PASSAGE_COUNT && (
-                    <GradientButton
-                      label={t('veSave')}
-                      style={{ marginTop: 14 }}
-                      onPress={async () => {
-                        setTestState('uploading');
-                        try {
-                          const res = await uploadVoiceprint(
-                            session,
-                            Object.values(done).sort((a, b) => a.index - b.index),
-                          );
-                          if (res.ok) setTestState('ok');
-                          else {
-                            setVeError(res.error ?? 'unknown');
-                            setTestState('fail');
-                          }
-                        } catch (e) {
-                          setVeError(e instanceof Error ? e.message : String(e));
-                          setTestState('fail');
-                        }
-                      }}
-                    />
-                  )}
-                </>
-              )}
-            </>
-          );
-        })()}
+                    } catch (e) {
+                      setVeError(e instanceof Error ? e.message : String(e));
+                      setTestState('fail');
+                    }
+                  }}
+                />
+                <Text style={styles.veWhy}>{t('veWhy')}</Text>
+              </>
+            )}
+          </>
+        )}
       </Card>
     </ScrollView>
   );
