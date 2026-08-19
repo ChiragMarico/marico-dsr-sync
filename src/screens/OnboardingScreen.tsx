@@ -13,7 +13,14 @@ import {
 } from '../permissions/permissions';
 import { requestBatteryExemption, openAutostart, openAppLocationSettings } from '../permissions/autoSetup';
 import { markOnboarded, saveConsent } from '../onboarding/consent';
-import { runVoiceEnrollment, ENROLL_SECONDS } from '../onboarding/voiceEnrollment';
+import {
+  recordPassage,
+  uploadVoiceprint,
+  PASSAGE_SECONDS,
+  PASSAGE_COUNT,
+  PassageResult,
+} from '../onboarding/voiceEnrollment';
+import { StringKey } from '../i18n/strings';
 import { C, T } from '../ui/theme';
 import { Card, GradientButton } from '../ui/components';
 import { LanguagePicker } from '../ui/LanguagePicker';
@@ -48,10 +55,14 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
   const [pre, setPre] = useState<PreconditionStatus | null>(null);
   const [batteryDone, setBatteryDone] = useState(false);
   const [testState, setTestState] = useState<'idle' | 'running' | 'uploading' | 'ok' | 'fail'>('idle');
-  // Seconds remaining while the rep reads the prompt — without a visible
-  // countdown they stop talking after a few seconds and the sample is unusable.
-  const [secsLeft, setSecsLeft] = useState(ENROLL_SECONDS);
+  // Seconds remaining while the rep speaks — without a visible countdown they
+  // stop talking after a few seconds and the sample is unusable.
+  const [secsLeft, setSecsLeft] = useState(PASSAGE_SECONDS);
   const [veError, setVeError] = useState('');
+  // Which passage is on screen, and which have been captured. Recording each
+  // separately lets a rep redo just the one that went wrong.
+  const [pIdx, setPIdx] = useState(0);
+  const [done, setDone] = useState<Record<number, PassageResult>>({});
   const [working, setWorking] = useState(false);
 
   const refresh = async () => setPre(await checkPreconditions());
@@ -227,67 +238,127 @@ export default function OnboardingScreen({ navigation, route, session, onDone }:
           </>
         )}
 
-        {step === 'voice' && (
-          <>
-            <Text style={styles.title}>{t('veTitle')}</Text>
-            <Text style={styles.body}>{t('veBody')}</Text>
+        {step === 'voice' && (() => {
+          const scripts: StringKey[] = ['veScript', 'veScript2', 'veScript3'];
+          const num = pIdx + 1;
+          const isFree = num === PASSAGE_COUNT; // last passage is unscripted
+          const captured = Object.keys(done).length;
+          const recorded = !!done[num];
 
-            {/* The line the rep reads aloud. Large and high-contrast because
-                they are reading it while holding the phone at arm's length. */}
-            <View style={styles.scriptBox}>
-              <Text style={styles.scriptTxt}>
-                {t('veScript', { name: session.dsr.name })}
-              </Text>
-            </View>
+          return (
+            <>
+              <Text style={styles.title}>{t('veTitle')}</Text>
+              <Text style={styles.body}>{t('veBody')}</Text>
 
-            {testState === 'ok' && <Text style={styles.okTxt}>{t('veSuccess')}</Text>}
-            {testState === 'fail' && (
-              <Text style={styles.warn}>{t('veFailed', { e: veError })}</Text>
-            )}
-
-            {testState === 'running' ? (
-              <View style={styles.recBox}>
-                <Text style={styles.recNow}>{t('veRecording')}</Text>
-                <Text style={styles.recCount}>{t('veSecondsLeft', { s: secsLeft })}</Text>
+              <View style={styles.passHead}>
+                <Text style={styles.passOf}>
+                  {t('vePassageOf', { n: num, total: PASSAGE_COUNT })}
+                </Text>
+                <Text style={styles.passKind}>
+                  {isFree ? t('veSpeakFreely') : t('veReadAloud')}
+                </Text>
               </View>
-            ) : testState === 'uploading' ? (
-              <View style={styles.running}>
-                <ActivityIndicator color={C.cobalt} />
-                <Text style={styles.runningTxt}>{t('veUploading')}</Text>
+
+              {/* Large and high-contrast — the rep reads this at arm's length. */}
+              <View style={[styles.scriptBox, isFree && styles.scriptBoxFree]}>
+                <Text style={styles.scriptTxt}>
+                  {t(scripts[pIdx], { name: session.dsr.name })}
+                </Text>
               </View>
-            ) : testState === 'ok' ? (
-              <GradientButton label={t('obFinish')} onPress={finish} />
-            ) : (
-              <>
-                <GradientButton
-                  label={testState === 'fail' ? t('veRetry') : t('veStart')}
-                  onPress={async () => {
-                    setVeError('');
-                    setSecsLeft(ENROLL_SECONDS);
-                    setTestState('running');
-                    try {
-                      const res = await runVoiceEnrollment(session, (left) => {
-                        setSecsLeft(left);
-                        // Recording is done; the remaining wait is the upload.
-                        if (left === 0) setTestState('uploading');
-                      });
-                      if (res.ok) {
-                        setTestState('ok');
-                      } else {
-                        setVeError(res.error ?? 'unknown');
+
+              {recorded && testState !== 'running' && (
+                <Text style={styles.okTxt}>{t('veDoneMark')}</Text>
+              )}
+              {testState === 'fail' && (
+                <Text style={styles.warn}>{t('veFailed', { e: veError })}</Text>
+              )}
+
+              {testState === 'running' ? (
+                <View style={styles.recBox}>
+                  <Text style={styles.recNow}>{t('veRecording')}</Text>
+                  <Text style={styles.recCount}>{t('veSecondsLeft', { s: secsLeft })}</Text>
+                </View>
+              ) : testState === 'uploading' ? (
+                <View style={styles.running}>
+                  <ActivityIndicator color={C.cobalt} />
+                  <Text style={styles.runningTxt}>{t('veUploading')}</Text>
+                </View>
+              ) : testState === 'ok' ? (
+                <>
+                  <Text style={styles.okTxt}>{t('veSuccess')}</Text>
+                  <GradientButton label={t('obFinish')} onPress={finish} />
+                </>
+              ) : (
+                <>
+                  <GradientButton
+                    label={recorded ? t('veReRecord') : t('veStart')}
+                    onPress={async () => {
+                      setVeError('');
+                      setSecsLeft(PASSAGE_SECONDS);
+                      setTestState('running');
+                      try {
+                        const res = await recordPassage(session, num, setSecsLeft);
+                        setDone((d) => ({ ...d, [num]: res }));
+                        setTestState('idle');
+                        // Move to the next unrecorded passage automatically.
+                        if (num < PASSAGE_COUNT) setPIdx(pIdx + 1);
+                      } catch (e) {
+                        setVeError(e instanceof Error ? e.message : String(e));
                         setTestState('fail');
                       }
-                    } catch (e) {
-                      setVeError(e instanceof Error ? e.message : String(e));
-                      setTestState('fail');
-                    }
-                  }}
-                />
-                <Text style={styles.veWhy}>{t('veWhy')}</Text>
-              </>
-            )}
-          </>
-        )}
+                    }}
+                  />
+
+                  <View style={styles.navRow}>
+                    <GradientButton
+                      label={t('vePrev')}
+                      variant="ghost"
+                      disabled={pIdx === 0}
+                      onPress={() => setPIdx(Math.max(0, pIdx - 1))}
+                      style={styles.navBtn}
+                    />
+                    <GradientButton
+                      label={t('veNext')}
+                      variant="ghost"
+                      disabled={pIdx >= PASSAGE_COUNT - 1}
+                      onPress={() => setPIdx(Math.min(PASSAGE_COUNT - 1, pIdx + 1))}
+                      style={styles.navBtn}
+                    />
+                  </View>
+
+                  <Text style={styles.veWhy}>
+                    {t('veProgress', { n: captured, total: PASSAGE_COUNT })}
+                  </Text>
+
+                  {/* Only offer to save once every passage is captured. */}
+                  {captured === PASSAGE_COUNT && (
+                    <GradientButton
+                      label={t('veSave')}
+                      style={{ marginTop: 14 }}
+                      onPress={async () => {
+                        setTestState('uploading');
+                        try {
+                          const res = await uploadVoiceprint(
+                            session,
+                            Object.values(done).sort((a, b) => a.index - b.index),
+                          );
+                          if (res.ok) setTestState('ok');
+                          else {
+                            setVeError(res.error ?? 'unknown');
+                            setTestState('fail');
+                          }
+                        } catch (e) {
+                          setVeError(e instanceof Error ? e.message : String(e));
+                          setTestState('fail');
+                        }
+                      }}
+                    />
+                  )}
+                </>
+              )}
+            </>
+          );
+        })()}
       </Card>
     </ScrollView>
   );
@@ -330,6 +401,15 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   scriptTxt: { ...T.body, fontSize: 19, lineHeight: 29, fontWeight: '600', color: C.ink },
+  scriptBoxFree: {
+    backgroundColor: 'rgba(127,194,65,0.10)',
+    borderLeftColor: C.lima,
+  },
+  passHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  passOf: { ...T.caption, fontSize: 13, fontWeight: '700' },
+  passKind: { ...T.caption, fontSize: 13, color: C.cobalt, fontWeight: '700' },
+  navRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  navBtn: { flex: 1 },
   recBox: {
     alignItems: 'center',
     paddingVertical: 20,

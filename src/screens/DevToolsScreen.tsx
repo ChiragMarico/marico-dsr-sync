@@ -9,7 +9,12 @@ import { C, R, SHADOW, T } from '../ui/theme';
 import { Card, GradientButton } from '../ui/components';
 import { EXIT_RADIUS_M } from '../constants';
 import { runSelfTest, SelfTestCycle } from '../dev/selfTest';
-import { runVoiceEnrollment, ENROLL_SECONDS } from '../onboarding/voiceEnrollment';
+import {
+  recordPassage,
+  uploadVoiceprint,
+  PASSAGE_SECONDS,
+  PASSAGE_COUNT,
+} from '../onboarding/voiceEnrollment';
 
 interface Extra {
   session: Session;
@@ -32,21 +37,27 @@ export default function DevToolsScreen({ session }: Props<'DevTools'> & Extra) {
   const [stResult, setStResult] = useState<SelfTestCycle[] | null>(null);
   // Voice enrollment can be re-run from here without walking the whole wizard.
   const [veState, setVeState] = useState<'idle' | 'rec' | 'up' | 'ok' | 'fail'>('idle');
-  const [veLeft, setVeLeft] = useState(ENROLL_SECONDS);
+  const [veLeft, setVeLeft] = useState(PASSAGE_SECONDS);
   const [veMsg, setVeMsg] = useState('');
 
+  // Records all passages back-to-back, then uploads — a quick end-to-end check
+  // without walking the whole onboarding wizard.
   const runVE = async () => {
     setVeMsg('');
-    setVeLeft(ENROLL_SECONDS);
-    setVeState('rec');
+    setVeLeft(PASSAGE_SECONDS);
     try {
-      const res = await runVoiceEnrollment(session, (left) => {
-        setVeLeft(left);
-        if (left === 0) setVeState('up');
-      });
+      const passages = [];
+      for (let i = 1; i <= PASSAGE_COUNT; i++) {
+        setVeState('rec');
+        setVeMsg(`passage ${i} of ${PASSAGE_COUNT} — speak now`);
+        passages.push(await recordPassage(session, i, setVeLeft));
+      }
+      setVeState('up');
+      setVeMsg('');
+      const res = await uploadVoiceprint(session, passages);
       if (res.ok) {
         setVeState('ok');
-        setVeMsg(`saved · ${Math.round((res.sizeBytes ?? 0) / 1024)} KB`);
+        setVeMsg(`saved · ${PASSAGE_COUNT} passages · ${Math.round((res.totalBytes ?? 0) / 1024)} KB`);
       } else {
         setVeState('fail');
         setVeMsg(res.error ?? 'unknown');
@@ -156,9 +167,9 @@ export default function DevToolsScreen({ session }: Props<'DevTools'> & Extra) {
       <Text style={styles.sectionLabel}>Voice enrollment</Text>
       <Card style={styles.card}>
         <Text style={styles.cardBody}>
-          Records {ENROLL_SECONDS}s of you speaking and uploads it as this DSR's
-          voiceprint, to sync/voiceprints/{session.dsr.id}/. Re-runnable — the
-          newest one wins.
+          Records {PASSAGE_COUNT} passages of {PASSAGE_SECONDS}s each back-to-back
+          and uploads them as this DSR's voiceprint, to
+          sync/voiceprints/{session.dsr.id}/. Re-runnable — the newest wins.
         </Text>
         <GradientButton
           label={
