@@ -6,7 +6,9 @@
 export const LOCATION_INTERVAL_MS = 1_000; // location update cadence on duty (~1s = fastest GPS; higher battery)
 export const ENTER_RADIUS_M = 10; // inside this = "at outlet" (per-outlet override allowed)
 export const EXIT_RADIUS_M = 10; // beyond this = "left outlet" (equal → minimal hysteresis; may flicker at the edge)
-export const ENTER_CONFIRM_S = 10; // must stay inside before ENTER fires (testing value; PRD prod = 30)
+export const ENTER_CONFIRM_S = 5; // must stay inside before ENTER fires — kept short so the
+// opening of a conversation isn't missed; the cost is the occasional recording
+// from someone pausing near a shop without going in.
 export const EXIT_CONFIRM_S = 10; // must stay outside before EXIT fires (testing value; PRD prod = 120)
 export const MAX_RECORDING_MIN = 45; // hard cap per visit
 export const ACCURACY_REJECT_M = 80; // discard fixes worse than this
@@ -57,7 +59,7 @@ export const APK_BASE_URL =
 // ── App ──────────────────────────────────────────────────────────
 export const APP_VERSION = '1.1.0';
 // Bumped on every over-the-air update so Settings shows what's installed.
-export const BUILD_LABEL = 'v7.7 · pilot — 48kHz high-quality audio';
+export const BUILD_LABEL = 'v7.8 · pilot — 5s recording start';
 export const LOCATION_TASK = 'dsr-location-task';
 export const AUTO_END_HOUR = 23; // duty auto-ends at 11:59 PM if DSR forgets
 export const MIN_FREE_MB_WARN = 200;
