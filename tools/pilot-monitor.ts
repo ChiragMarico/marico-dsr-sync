@@ -14,6 +14,53 @@
  */
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { createServer } = require('http') as typeof import('http');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { execFile } = require('child_process') as typeof import('child_process');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { writeFileSync, readFileSync, unlinkSync } = require('fs') as typeof import('fs');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const os = require('os') as typeof import('os');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const path = require('path') as typeof import('path');
+
+/**
+ * Transcode to MP3 so the browser can actually play it.
+ *
+ * Browsers have no AMR decoder, and the pilot's early recordings are AMR-NB —
+ * so <audio> loaded them, failed to decode, and sat at 0:00/0:00 looking like
+ * the file was missing. Converting server-side makes every recording playable
+ * regardless of what it was captured as. Returns null if ffmpeg is unavailable,
+ * in which case we fall back to serving the original bytes.
+ */
+function toMp3(input: Buffer): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const tmpIn = path.join(os.tmpdir(), `sync-${Date.now()}-${Math.random().toString(36).slice(2)}.m4a`);
+    const tmpOut = tmpIn.replace(/\.m4a$/, '.mp3');
+    try {
+      writeFileSync(tmpIn, input);
+    } catch {
+      resolve(null);
+      return;
+    }
+    execFile(
+      'ffmpeg',
+      ['-v', 'error', '-y', '-i', tmpIn, '-ac', '1', '-b:a', '96k', tmpOut],
+      (err: unknown) => {
+        let out: Buffer | null = null;
+        if (!err) {
+          try {
+            out = readFileSync(tmpOut);
+          } catch {
+            out = null;
+          }
+        }
+        try { unlinkSync(tmpIn); } catch { /* noop */ }
+        try { unlinkSync(tmpOut); } catch { /* noop */ }
+        resolve(out);
+      },
+    );
+  });
+}
 import { sha256 } from 'js-sha256';
 import { S3 } from '../src/config/s3Config';
 
@@ -303,26 +350,21 @@ createServer(async (req: any, res: any) => {
         res.writeHead(400).end('missing key');
         return;
       }
-      const range = req.headers?.range as string | undefined;
-      const upstream = await fetch(signed('GET', key), {
-        headers: range ? { Range: range } : {},
-      });
-      if (!upstream.ok && upstream.status !== 206) {
+      const upstream = await fetch(signed('GET', key));
+      if (!upstream.ok) {
         res.writeHead(upstream.status).end('upstream ' + upstream.status);
         return;
       }
-      const buf = Buffer.from(await upstream.arrayBuffer());
-      const headers: Record<string, string> = {
-        'Content-Type': 'audio/mp4',
-        'Content-Length': String(buf.length),
-        'Accept-Ranges': 'bytes',
+      const original = Buffer.from(await upstream.arrayBuffer());
+      const mp3 = await toMp3(original);
+      const body = mp3 ?? original;
+      res.writeHead(200, {
+        'Content-Type': mp3 ? 'audio/mpeg' : 'audio/mp4',
+        'Content-Length': String(body.length),
+        'Accept-Ranges': 'none',
         'Cache-Control': 'no-store',
-      };
-      // Preserve the partial-content response so seeking works.
-      const cr = upstream.headers.get('content-range');
-      if (cr) headers['Content-Range'] = cr;
-      res.writeHead(cr ? 206 : 200, headers);
-      res.end(buf);
+      });
+      res.end(body);
       return;
     }
 
