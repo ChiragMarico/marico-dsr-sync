@@ -119,6 +119,36 @@ async function listAll(prefix: string): Promise<Obj[]> {
   return out;
 }
 
+/**
+ * Visit duration comes from the manifest the app writes next to the audio.
+ * Reading it from the file itself would mean downloading every clip; the
+ * manifest is a couple of KB and already carries total_duration_s.
+ * Cached because manifests never change once written.
+ */
+const durationCache = new Map<string, number | null>();
+
+async function fetchDurations(manifestKeys: string[]): Promise<void> {
+  const missing = manifestKeys.filter((k) => !durationCache.has(k));
+  await Promise.all(
+    missing.map(async (k) => {
+      try {
+        const r = await fetch(signed('GET', k));
+        if (!r.ok) {
+          durationCache.set(k, null);
+          return;
+        }
+        const j = (await r.json()) as { total_duration_s?: number };
+        durationCache.set(k, typeof j.total_duration_s === 'number' ? j.total_duration_s : null);
+      } catch {
+        durationCache.set(k, null);
+      }
+    }),
+  );
+}
+
+/** Seconds → m:ss. */
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+
 const IST = (iso: string) =>
   iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }).slice(-8) : '—';
 const minsAgo = (iso: string) => (Date.now() - new Date(iso).getTime()) / 60000;
@@ -204,6 +234,7 @@ async function buildReport(filterDsr?: string) {
       const p = a.key.split('/');
       return {
         key: a.key,
+        manifestKey: a.key.replace(/[^/]+$/, 'manifest.json'),
         dsr: p[2] ?? '?',
         date: p[3] ?? '',
         outlet: p[4] ?? '?',
@@ -212,6 +243,8 @@ async function buildReport(filterDsr?: string) {
       };
     });
 
+  await fetchDurations(clips.map((c) => c.manifestKey));
+
   const dsrList = [...new Set(audio.map((a) => a.key.split('/')[2]))].sort();
 
   // Probe the most recent recording — enough to catch a format regression
@@ -219,18 +252,21 @@ async function buildReport(filterDsr?: string) {
   let format: { codec: string; sampleRate: number; when: string } | null = null;
   const newest = audio.slice().sort((a, b) => b.modified.localeCompare(a.modified))[0];
   if (newest) {
-    try {
-      // A recorder writes moov at the END of the file (duration is unknown
-      // until it stops), so the format lives in the tail, not the header.
-      const from = Math.max(0, newest.size - 65536);
-      const tail = await fetch(signed('GET', newest.key), {
-        headers: { Range: `bytes=${from}-` },
-      });
-      const p = probeAudio(Buffer.from(await tail.arrayBuffer()));
-      if (p) format = { ...p, when: newest.modified };
-    } catch {
-      /* probe is best-effort */
-    }
+    // moov (which holds the format) can sit at either end of an MP4 depending
+    // on the encoder, so try the tail first and fall back to the head rather
+    // than reporting "unknown" for larger files.
+    const tryRange = async (range: string) => {
+      try {
+        const r = await fetch(signed('GET', newest.key), { headers: { Range: range } });
+        if (!r.ok && r.status !== 206) return null;
+        return probeAudio(Buffer.from(await r.arrayBuffer()));
+      } catch {
+        return null;
+      }
+    };
+    const from = Math.max(0, newest.size - 262144);
+    const p = (await tryRange(`bytes=${from}-`)) ?? (await tryRange('bytes=0-262143'));
+    if (p) format = { ...p, when: newest.modified };
   }
 
   return { rows, todayIST, clips, dsrList, filterDsr, format, totalToday: rows.reduce((s, r) => s + r.today, 0) };
@@ -294,6 +330,12 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
   <div class="card"><div class="k">Active now</div><div class="v" style="color:#17803D">${active}</div></div>
   <div class="card"><div class="k">Reps seen</div><div class="v">${real.length}</div></div>
   <div class="card"><div class="k">Recordings today</div><div class="v">${r.totalToday}</div></div>
+  <div class="card"><div class="k">Recorded today</div><div class="v" style="font-size:24px">${(() => {
+    const secs = r.clips
+      .filter((c) => c.date === r.todayIST)
+      .reduce((t, c) => t + (durationCache.get(c.manifestKey) ?? 0), 0);
+    return secs ? `${Math.floor(secs / 60)}<span style="font-size:15px;color:#8A93A8">m</span>` : '—';
+  })()}</div></div>
   <div class="card"><div class="k">Audio format</div><div class="v" style="font-size:19px;color:${
     r.format ? (r.format.codec === 'aac' && r.format.sampleRate >= 44100 ? '#17803D' : '#C4362B') : '#8A93A8'
   }">${r.format ? `${r.format.codec} ${(r.format.sampleRate / 1000).toFixed(1)}kHz` : '—'}</div>
@@ -319,7 +361,13 @@ ${r.clips.map((c) => `
     <div class="cmeta">
       <b>${c.dsr}</b>
       <span class="cout">${c.outlet}</span>
-      <span class="ctime">${IST(c.modified)} IST · ${c.date} · ${c.sizeKB} KB</span>
+      <span class="ctime">${(() => {
+        const d = durationCache.get(c.manifestKey);
+        // Under ~5s usually means the geofence fired and the rep moved off
+        // again — worth seeing at a glance rather than hunting for.
+        const dur = d == null ? '—' : `${mmss(d)}${d < 5 ? ' ⚠' : ''}`;
+        return `<b style="color:${d != null && d < 5 ? '#C4362B' : '#5A6478'}">${dur}</b>`;
+      })()} · ${IST(c.modified)} IST · ${c.date} · ${c.sizeKB} KB</span>
     </div>
     <audio controls preload="metadata" src="/play?key=${encodeURIComponent(c.key)}"></audio>
     <a class="dl" href="/download?key=${encodeURIComponent(c.key)}">download</a>
