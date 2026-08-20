@@ -76,6 +76,35 @@ const IST = (iso: string) =>
   iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }).slice(-8) : '—';
 const minsAgo = (iso: string) => (Date.now() - new Date(iso).getTime()) / 60000;
 
+/**
+ * Read the real codec/sample-rate out of an .m4a by parsing its MP4 boxes.
+ *
+ * Exists because the app once silently recorded 8 kHz AMR for a full pilot day
+ * while the config asked for 48 kHz AAC — Android had fallen back to its
+ * default encoder. Nothing in the app, the types, or the tests could see that;
+ * only the bytes on disk could. So the monitor checks the bytes.
+ */
+function probeAudio(buf: Buffer): { codec: string; sampleRate: number } | null {
+  // Walk to the sample-description box (stsd) and read the entry that follows.
+  const idx = buf.indexOf('stsd');
+  if (idx < 0) return null;
+  // idx points at the 4-char box TYPE, so contents start at idx+4:
+  //   4 version/flags + 4 entry count  →  first sample entry at idx+12.
+  // Within the entry: 4 size, 4 format, 6 reserved, 2 data-ref,
+  //   8 version/revision/vendor, 2 channels, 2 sample size,
+  //   2 pre-defined, 2 reserved, then 4 bytes sample rate as 16.16 fixed
+  //   point — the integer part is the top 16 bits, at entry+32.
+  const entry = idx + 12;
+  if (entry + 36 > buf.length) return null;
+  const format = buf.toString('latin1', entry + 4, entry + 8);
+  const sampleRate = buf.readUInt16BE(entry + 32);
+  const codec =
+    format === 'mp4a' ? 'aac' :
+    format === 'samr' ? 'AMR-NB' :
+    format === 'sawb' ? 'AMR-WB' : format;
+  return { codec, sampleRate };
+}
+
 async function buildReport(filterDsr?: string) {
   const [recs, prints] = await Promise.all([
     listAll('marico-dsr/recordings/'),
@@ -138,7 +167,26 @@ async function buildReport(filterDsr?: string) {
 
   const dsrList = [...new Set(audio.map((a) => a.key.split('/')[2]))].sort();
 
-  return { rows, todayIST, clips, dsrList, filterDsr, totalToday: rows.reduce((s, r) => s + r.today, 0) };
+  // Probe the most recent recording — enough to catch a format regression
+  // without downloading everything.
+  let format: { codec: string; sampleRate: number; when: string } | null = null;
+  const newest = audio.slice().sort((a, b) => b.modified.localeCompare(a.modified))[0];
+  if (newest) {
+    try {
+      // A recorder writes moov at the END of the file (duration is unknown
+      // until it stops), so the format lives in the tail, not the header.
+      const from = Math.max(0, newest.size - 65536);
+      const tail = await fetch(signed('GET', newest.key), {
+        headers: { Range: `bytes=${from}-` },
+      });
+      const p = probeAudio(Buffer.from(await tail.arrayBuffer()));
+      if (p) format = { ...p, when: newest.modified };
+    } catch {
+      /* probe is best-effort */
+    }
+  }
+
+  return { rows, todayIST, clips, dsrList, filterDsr, format, totalToday: rows.reduce((s, r) => s + r.today, 0) };
 }
 
 function page(r: Awaited<ReturnType<typeof buildReport>>) {
@@ -199,6 +247,14 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
   <div class="card"><div class="k">Active now</div><div class="v" style="color:#17803D">${active}</div></div>
   <div class="card"><div class="k">Reps seen</div><div class="v">${real.length}</div></div>
   <div class="card"><div class="k">Recordings today</div><div class="v">${r.totalToday}</div></div>
+  <div class="card"><div class="k">Audio format</div><div class="v" style="font-size:19px;color:${
+    r.format ? (r.format.codec === 'aac' && r.format.sampleRate >= 44100 ? '#17803D' : '#C4362B') : '#8A93A8'
+  }">${r.format ? `${r.format.codec} ${(r.format.sampleRate / 1000).toFixed(1)}kHz` : '—'}</div>
+  <div style="font-size:11px;color:#8A93A8;margin-top:4px">${
+    r.format
+      ? (r.format.codec === 'aac' && r.format.sampleRate >= 44100 ? 'newest recording OK' : '⚠ NOT high quality')
+      : 'no recordings'
+  }</div></div>
   <div class="card"><div class="k">Voiceprints</div><div class="v">${real.filter(x=>x.enrolled).length}<span style="font-size:16px;color:#8A93A8">/${real.length}</span></div></div>
 </div>
 <table><thead><tr>
