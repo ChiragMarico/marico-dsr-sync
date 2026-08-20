@@ -1,28 +1,35 @@
-import { RecordingPresets, type RecordingOptions } from 'expo-audio';
+import type { RecordingOptions } from 'expo-audio';
 import { AUDIO_BITRATE, AUDIO_SAMPLE_RATE } from '../constants';
 
 /**
  * Recording format: mono AAC in an .m4a container.
  *
- * WHY THIS IS BUILT ON A PRESET RATHER THAN HAND-ROLLED
- * -----------------------------------------------------
- * The previous version set sampleRate/bitRate only at the TOP level and gave
- * the `android` block just outputFormat + audioEncoder. On device that silently
- * produced **AMR-NB at 8 kHz / 12.8 kbps** — Android's fallback codec, the one
- * used for 2G phone calls — instead of the 44.1 kHz AAC we asked for. Every
- * pilot recording came out telephone-quality and sounded muffled.
+ * WHY outputFormat / audioEncoder ARE SET AT THE TOP LEVEL
+ * --------------------------------------------------------
+ * The TypeScript types put these inside the `android` block, but expo-audio's
+ * Android implementation reads them FLAT off the options object:
  *
- * Android reads its settings from the `android` block, so anything that matters
- * must be repeated there, not just at the top level. We now spread
- * RecordingPresets.HIGH_QUALITY (expo's own tested configuration) and override
- * explicitly in BOTH places, so a missing key can never fall back to AMR again.
+ *   data class RecordingOptions(
+ *     @Field val extension: String,
+ *     @Field val sampleRate: Double?,
+ *     @Field val outputFormat: ...?,     // <- top level, not options.android
+ *     @Field val audioEncoder: ...?,
+ *   )
  *
- * Mono at 64 kbps: speech needs no stereo, and 64 kbps mono AAC is transparent
- * for voice while being a third the size of the old 192 kbps setting.
+ *   if (options.audioEncoder != null) setAudioEncoder(...)
+ *   else setAudioEncoder(MediaRecorder.AudioEncoder.DEFAULT)   // AMR-NB
+ *
+ * With them nested, the native side saw null and fell back to Android's DEFAULT
+ * encoder — AMR-NB — so every pilot recording came out as an 8 kHz phone-call
+ * codec regardless of what we asked for. The sample rate followed, because
+ * AMR-NB only supports 8 kHz, so setAudioSamplingRate(48000) was ignored.
+ *
+ * They are therefore set in BOTH places: flat for the native code that actually
+ * reads them, and nested to satisfy the published types. Verify any change here
+ * against a real uploaded file (ffprobe should report `aac`, not `amr_nb`) —
+ * types, unit tests and the bundle check cannot catch this.
  */
 export const AUDIO_OPTIONS: RecordingOptions = {
-  ...RecordingPresets.HIGH_QUALITY,
-
   // Record straight to the persistent document dir (not cache) so we never
   // have to move the file before upload — the move was silently dropping audio.
   directory: 'document',
@@ -31,21 +38,28 @@ export const AUDIO_OPTIONS: RecordingOptions = {
   numberOfChannels: 1,
   bitRate: AUDIO_BITRATE,
 
+  // Read by the Android native module. Without these it uses AMR-NB.
+  outputFormat: 'mpeg4',
+  audioEncoder: 'aac',
+
   android: {
-    ...RecordingPresets.HIGH_QUALITY.android,
     extension: '.m4a',
     outputFormat: 'mpeg4',
     audioEncoder: 'aac',
-    // Repeated here deliberately — this is the block Android actually reads.
     sampleRate: AUDIO_SAMPLE_RATE,
   },
 
   ios: {
-    ...RecordingPresets.HIGH_QUALITY.ios,
+    outputFormat: 'MPEG4AAC' as unknown as RecordingOptions['ios']['outputFormat'],
+    audioQuality: 96 as unknown as RecordingOptions['ios']['audioQuality'],
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
   },
 
   web: {
     mimeType: 'audio/webm',
     bitsPerSecond: AUDIO_BITRATE,
   },
-};
+  // The flat outputFormat/audioEncoder above are not in the published type.
+} as RecordingOptions;
