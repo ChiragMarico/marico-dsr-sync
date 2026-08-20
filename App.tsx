@@ -2,6 +2,7 @@ import './src/duty/locationTask'; // registers the background location task at l
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, AppStateStatus, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as Updates from 'expo-updates';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -77,6 +78,37 @@ function configureUploadAuth(session: Session) {
   });
 }
 
+/**
+ * Fetch and apply an over-the-air update, explicitly.
+ *
+ * expo-updates checks on launch by default, but it only DOWNLOADS in the
+ * background and applies on some later launch — so a rep who force-closes the
+ * app before the ~3 MB finishes never gets it. In the field that meant updates
+ * effectively never landed unless someone opened Settings and tapped the
+ * button by hand, which is not something to ask of 2,392 low-literacy users.
+ *
+ * This waits for the download, then reloads immediately — but ONLY when it is
+ * safe to do so. Reloading restarts the JS engine, which would abort an active
+ * recording and lose a visit, so anything mid-duty is left alone and the update
+ * applies at the next launch instead.
+ */
+async function applyUpdateIfSafe(): Promise<boolean> {
+  if (!Updates.isEnabled) return false; // dev client / Expo Go
+  try {
+    const check = await Updates.checkForUpdateAsync();
+    if (!check.isAvailable) return false;
+    await Updates.fetchUpdateAsync();
+
+    // Never interrupt a rep who is working — a reload would kill the recording.
+    if (dutyController.isOnDuty() || dutyController.getState().recording) return false;
+
+    await Updates.reloadAsync();
+    return true;
+  } catch {
+    return false; // offline, or the update server is unreachable — try again later
+  }
+}
+
 export default function App() {
   const { t } = useT();
   const [booting, setBooting] = useState(true);
@@ -90,6 +122,11 @@ export default function App() {
   useEffect(() => {
     (async () => {
       await initLang();
+
+      // Pull any pending OTA update first. If one applies, reloadAsync() never
+      // returns — the app restarts on the new bundle — so nothing below runs.
+      await applyUpdateIfSafe();
+
       // Runs before anything else so an unsupported build never reaches the
       // login screen. Fails open — a network blip must not brick the fleet.
       const up = await checkForUpdate();
@@ -111,6 +148,9 @@ export default function App() {
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
         dutyController.onAppForeground();
+        // A second chance to pick up an update — reps often background the app
+        // rather than closing it, so launch alone is not enough opportunity.
+        void applyUpdateIfSafe();
       }
       appState.current = next;
     });
