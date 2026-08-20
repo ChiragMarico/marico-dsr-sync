@@ -191,6 +191,7 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
  .cout{color:#5A6478;font-size:13px;margin-left:8px}
  .ctime{display:block;color:#8A93A8;font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
  .clip audio{height:36px}
+ .dl{font-size:12px;color:#1C5AA8;text-decoration:none}
 </style></head><body><div class="wrap">
 <h1>Sync pilot monitor</h1>
 <p class="sub">${r.todayIST} · refreshed ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · <a href="javascript:location.reload()" style="color:#1C5AA8">refresh</a></p>
@@ -217,7 +218,8 @@ ${r.clips.map((c) => `
       <span class="cout">${c.outlet}</span>
       <span class="ctime">${IST(c.modified)} IST · ${c.date} · ${c.sizeKB} KB</span>
     </div>
-    <audio controls preload="none" src="/play?key=${encodeURIComponent(c.key)}"></audio>
+    <audio controls preload="metadata" src="/play?key=${encodeURIComponent(c.key)}"></audio>
+    <a class="dl" href="/download?key=${encodeURIComponent(c.key)}">download</a>
   </div>`).join('')}
 ${r.clips.length === 0 ? '<p class="foot">No recordings yet.</p>' : ''}
 </div>
@@ -234,16 +236,55 @@ createServer(async (req: any, res: any) => {
   try {
     const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
 
-    // Redirect to a freshly signed S3 URL rather than embedding one in the
-    // page — embedded links would expire while the tab sat open.
+    // Stream the audio through this server rather than redirecting to S3.
+    // A redirect works in curl but browsers refuse to play media across an
+    // origin change, so <audio> silently did nothing. Proxying keeps it
+    // same-origin. Clips are small (tens to a few hundred KB), so buffering
+    // them is fine and it also avoids signed URLs expiring in an open tab.
     if (url.pathname === '/play') {
       const key = url.searchParams.get('key');
       if (!key) {
         res.writeHead(400).end('missing key');
         return;
       }
-      res.writeHead(302, { Location: signed('GET', key) });
-      res.end();
+      const range = req.headers?.range as string | undefined;
+      const upstream = await fetch(signed('GET', key), {
+        headers: range ? { Range: range } : {},
+      });
+      if (!upstream.ok && upstream.status !== 206) {
+        res.writeHead(upstream.status).end('upstream ' + upstream.status);
+        return;
+      }
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      const headers: Record<string, string> = {
+        'Content-Type': 'audio/mp4',
+        'Content-Length': String(buf.length),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      };
+      // Preserve the partial-content response so seeking works.
+      const cr = upstream.headers.get('content-range');
+      if (cr) headers['Content-Range'] = cr;
+      res.writeHead(cr ? 206 : 200, headers);
+      res.end(buf);
+      return;
+    }
+
+    // Download the original file rather than streaming it.
+    if (url.pathname === '/download') {
+      const key = url.searchParams.get('key');
+      if (!key) {
+        res.writeHead(400).end('missing key');
+        return;
+      }
+      const upstream = await fetch(signed('GET', key));
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.writeHead(200, {
+        'Content-Type': 'audio/mp4',
+        'Content-Length': String(buf.length),
+        'Content-Disposition': `attachment; filename="${key.split('/').slice(-3).join('_')}"`,
+      });
+      res.end(buf);
       return;
     }
 

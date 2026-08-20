@@ -15,6 +15,18 @@ const mockState = {
 
 jest.mock('expo-audio', () => ({
   setAudioModeAsync: jest.fn(async () => {}),
+  // audioConfig spreads HIGH_QUALITY, so the mock must provide it.
+  RecordingPresets: {
+    HIGH_QUALITY: {
+      extension: '.m4a',
+      sampleRate: 44100,
+      numberOfChannels: 2,
+      bitRate: 128000,
+      android: { outputFormat: 'mpeg4', audioEncoder: 'aac' },
+      ios: {},
+      web: {},
+    },
+  },
   AudioModule: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     AudioRecorder: jest.fn().mockImplementation(function (this: any) {

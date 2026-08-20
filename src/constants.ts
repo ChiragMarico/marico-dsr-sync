@@ -15,9 +15,12 @@ export const GPS_GAP_S = 90; // no acceptable fix for this long while ACTIVE →
 
 // ── Recording ────────────────────────────────────────────────────
 export const CHUNK_SECONDS = 120;
-// Clearer speech: 44.1 kHz / 192 kbps AAC mono (~2.9 MB per 2-min chunk).
+// Mono AAC at 44.1 kHz / 64 kbps (~480 KB per minute). Stereo buys nothing for
+// speech, and 64 kbps mono AAC is transparent for voice at a third the size of
+// the old 192 kbps. See recording/audioConfig.ts for why the android block must
+// repeat these values.
 export const AUDIO_SAMPLE_RATE = 44_100;
-export const AUDIO_BITRATE = 192_000;
+export const AUDIO_BITRATE = 64_000;
 // Android capture source (tunable). 'voice_recognition' = clean speech pickup,
 // widely supported. Alternatives to try in the field: 'unprocessed' (fuller,
 // rawer — no auto gain/noise suppression), 'mic' (device default), 'camcorder'.
@@ -47,7 +50,7 @@ export const APK_BASE_URL =
 // ── App ──────────────────────────────────────────────────────────
 export const APP_VERSION = '1.1.0';
 // Bumped on every over-the-air update so Settings shows what's installed.
-export const BUILD_LABEL = 'v7.5 · pilot — 30s voice enrollment';
+export const BUILD_LABEL = 'v7.6 · pilot — AAC audio fix';
 export const LOCATION_TASK = 'dsr-location-task';
 export const AUTO_END_HOUR = 23; // duty auto-ends at 11:59 PM if DSR forgets
 export const MIN_FREE_MB_WARN = 200;
