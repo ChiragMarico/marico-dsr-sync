@@ -76,7 +76,7 @@ const IST = (iso: string) =>
   iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }).slice(-8) : '—';
 const minsAgo = (iso: string) => (Date.now() - new Date(iso).getTime()) / 60000;
 
-async function buildReport() {
+async function buildReport(filterDsr?: string) {
   const [recs, prints] = await Promise.all([
     listAll('marico-dsr/recordings/'),
     listAll('marico-dsr/sync/voiceprints/'),
@@ -118,7 +118,27 @@ async function buildReport() {
     }
   }
 
-  return { rows, todayIST, totalToday: rows.reduce((s, r) => s + r.today, 0) };
+  // Recent recordings, newest first. Key shape:
+  //   marico-dsr/recordings/{dsr}/{date}/{outlet}/{visit}/chunk_001.m4a
+  const clips = audio
+    .filter((a) => !filterDsr || a.key.split('/')[2] === filterDsr)
+    .sort((a, b) => b.modified.localeCompare(a.modified))
+    .slice(0, 60)
+    .map((a) => {
+      const p = a.key.split('/');
+      return {
+        key: a.key,
+        dsr: p[2] ?? '?',
+        date: p[3] ?? '',
+        outlet: p[4] ?? '?',
+        sizeKB: Math.max(1, Math.round(a.size / 1024)),
+        modified: a.modified,
+      };
+    });
+
+  const dsrList = [...new Set(audio.map((a) => a.key.split('/')[2]))].sort();
+
+  return { rows, todayIST, clips, dsrList, filterDsr, totalToday: rows.reduce((s, r) => s + r.today, 0) };
 }
 
 function page(r: Awaited<ReturnType<typeof buildReport>>) {
@@ -142,7 +162,7 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
   }).join('');
 
   return `<!doctype html><html><head><meta charset="utf-8">
-<title>Sync pilot monitor</title><meta http-equiv="refresh" content="60">
+<title>Sync pilot monitor</title>
 <style>
  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#F5F7FB;color:#0F1523}
  .wrap{max-width:1000px;margin:0 auto;padding:32px 24px 60px}
@@ -160,9 +180,20 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
  .n{font-variant-numeric:tabular-nums}
  .tag{font-size:10px;background:#EEF1F7;padding:2px 6px;border-radius:4px;color:#5A6478}
  .foot{margin-top:18px;color:#8A93A8;font-size:12.5px;line-height:1.6}
+ .h2{font-size:18px;margin:34px 0 12px;letter-spacing:-.015em}
+ .cnt{font-size:12px;color:#8A93A8;font-weight:400;margin-left:8px}
+ .filters{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}
+ .chip{font-size:13px;padding:6px 12px;border-radius:100px;border:1px solid #E2E8F2;background:#fff;color:#5A6478;text-decoration:none}
+ .chip.on{background:#1C5AA8;border-color:#1C5AA8;color:#fff;font-weight:600}
+ .clips{display:grid;gap:9px}
+ .clip{background:#fff;border:1px solid #E2E8F2;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+ .cmeta{flex:1;min-width:210px}
+ .cout{color:#5A6478;font-size:13px;margin-left:8px}
+ .ctime{display:block;color:#8A93A8;font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
+ .clip audio{height:36px}
 </style></head><body><div class="wrap">
 <h1>Sync pilot monitor</h1>
-<p class="sub">${r.todayIST} · refreshed ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · auto-refreshes every 60s</p>
+<p class="sub">${r.todayIST} · refreshed ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · <a href="javascript:location.reload()" style="color:#1C5AA8">refresh</a></p>
 <div class="cards">
   <div class="card"><div class="k">Active now</div><div class="v" style="color:#17803D">${active}</div></div>
   <div class="card"><div class="k">Reps seen</div><div class="v">${real.length}</div></div>
@@ -172,6 +203,25 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
 <table><thead><tr>
  <th>DSR</th><th>Status</th><th>Today</th><th>Audio</th><th>Last upload (IST)</th><th>Ago</th><th>Voiceprint</th><th>All-time</th>
 </tr></thead><tbody>${cells}</tbody></table>
+<h2 class="h2">Recordings ${r.filterDsr ? '· ' + r.filterDsr : '· all reps'}
+  <span class="cnt">${r.clips.length} most recent</span></h2>
+<div class="filters">
+  <a class="chip ${!r.filterDsr ? 'on' : ''}" href="/">All</a>
+  ${r.dsrList.map((d) => `<a class="chip ${r.filterDsr === d ? 'on' : ''}" href="/?dsr=${encodeURIComponent(d)}">${d}</a>`).join('')}
+</div>
+<div class="clips">
+${r.clips.map((c) => `
+  <div class="clip">
+    <div class="cmeta">
+      <b>${c.dsr}</b>
+      <span class="cout">${c.outlet}</span>
+      <span class="ctime">${IST(c.modified)} IST · ${c.date} · ${c.sizeKB} KB</span>
+    </div>
+    <audio controls preload="none" src="/play?key=${encodeURIComponent(c.key)}"></audio>
+  </div>`).join('')}
+${r.clips.length === 0 ? '<p class="foot">No recordings yet.</p>' : ''}
+</div>
+
 <p class="foot">
  <b>Active</b> = a recording arrived in the last ${ACTIVE_MINUTES} minutes. Recordings are the live signal —
  day logs only upload when a rep <i>ends</i> their day, so they say nothing about someone mid-shift.<br>
@@ -180,9 +230,24 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
 </div></body></html>`;
 }
 
-createServer(async (_req: unknown, res: any) => {
+createServer(async (req: any, res: any) => {
   try {
-    const html = page(await buildReport());
+    const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+
+    // Redirect to a freshly signed S3 URL rather than embedding one in the
+    // page — embedded links would expire while the tab sat open.
+    if (url.pathname === '/play') {
+      const key = url.searchParams.get('key');
+      if (!key) {
+        res.writeHead(400).end('missing key');
+        return;
+      }
+      res.writeHead(302, { Location: signed('GET', key) });
+      res.end();
+      return;
+    }
+
+    const html = page(await buildReport(url.searchParams.get('dsr') ?? undefined));
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
   } catch (e) {
