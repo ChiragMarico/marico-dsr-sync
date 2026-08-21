@@ -91,6 +91,12 @@ export interface MicHealth {
    * otherwise completely invisible.
    */
   nativeErrors: string[];
+  /**
+   * Ticks on which the recorder refused to report a level at all. When this
+   * dominates the recording, the watchdog was blind: it can neither clear the
+   * mic nor detect silence, so absence of a SILENT verdict means nothing.
+   */
+  meterFailures: number;
 }
 
 export class ChunkedRecorder {
@@ -107,6 +113,7 @@ export class ChunkedRecorder {
     recoveryAttempts: 0,
     recoveredWith: null,
     nativeErrors: [],
+    meterFailures: 0,
   };
   private silentRun = 0;
   private warned = false;
@@ -197,7 +204,8 @@ export class ChunkedRecorder {
       try {
         db = rec.getStatus().metering ?? -160;
       } catch {
-        return; // recorder gone; stop() will clean up
+        this.health.meterFailures++;
+        return; // recorder gone or meter dead; stop() will clean up
       }
       if (db > this.health.peakDb) this.health.peakDb = db;
       // Audio after a rebuild means recovery worked — stop calling it silent.
@@ -358,10 +366,14 @@ export class ChunkedRecorder {
     // keys the upload queue derives from these names.
     for (const seg of this.priorSegments) this.cb.onChunkClosed(seg);
     if (uri) {
+      // If stop() races start() — a visit shorter than the cold-start retry
+      // loop — segStartMs can still be 0, and "now minus zero" wrote epoch-
+      // sized durations into real manifests. Fall back rather than report it.
+      const base = this.segStartMs || this.startMs || Date.now();
       this.cb.onChunkClosed({
         file: `chunk_${String(this.priorSegments.length + 1).padStart(3, '0')}.m4a`,
-        startTs: new Date(this.segStartMs).toISOString(),
-        durationS: Math.max(1, Math.round((Date.now() - this.segStartMs) / 1000)),
+        startTs: new Date(base).toISOString(),
+        durationS: Math.max(1, Math.round((Date.now() - base) / 1000)),
         path: uri,
       });
     }

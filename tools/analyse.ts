@@ -101,17 +101,26 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).
   for (const m of manifests) {
     let j: any = {};
     try { j = await (await fetch(signed(m.key))).json(); } catch { continue; }
-    const audioKey = m.key.replace(/manifest\.json$/, 'chunk_001.m4a');
-    const audio = mine.find((o) => o.key === audioKey);
-    const vol = audio ? measure(audioKey) : { peak: null, mean: null };
+    // A recovered visit uploads several chunks and the FIRST is the dead one —
+    // judging by chunk_001 alone under-reports exactly the repaired visits.
+    // The visit's verdict is its loudest chunk.
+    const dir = m.key.replace(/manifest\.json$/, '');
+    const audioFiles = mine.filter((o) => o.key.startsWith(dir) && /chunk_\d+\.m4a$/.test(o.key));
+    let vol: { peak: number | null; mean: number | null } = { peak: null, mean: null };
+    for (const a of audioFiles) {
+      const v = measure(a.key);
+      if (v.peak != null && (vol.peak == null || v.peak > vol.peak)) vol = v;
+    }
+    const audio = audioFiles[0];
     rows.push({
       time: ist(m.modified),
       outlet: (j.outlet_name ?? j.outlet_id ?? '?').slice(0, 26),
-      dur: j.total_duration_s ?? 0,
+      // epoch-sized garbage from the (now fixed) stop-during-start race
+      dur: j.total_duration_s > 86400 ? 0 : (j.total_duration_s ?? 0),
       build: (j.app_build ?? '?').split('·')[0].trim(),
       trigger: j.trigger ?? j.start_reason ?? '?',
       health: j.mic_health ?? null,
-      bytes: audio?.size ?? 0,
+      bytes: audioFiles.reduce((n, a) => n + a.size, 0),
       ...vol,
       flags: Object.entries(j.flags ?? {}).filter(([, v]) => v).map(([k]) => k),
     });
