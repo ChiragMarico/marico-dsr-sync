@@ -59,7 +59,7 @@ export const APK_BASE_URL =
 // ── App ──────────────────────────────────────────────────────────
 export const APP_VERSION = '1.1.0';
 // Bumped on every over-the-air update so Settings shows what's installed.
-export const BUILD_LABEL = 'v8.5 · pilot — mic FGS fix + in-app install';
+export const BUILD_LABEL = 'v8.6 · pilot — recovery keeps partial audio';
 export const LOCATION_TASK = 'dsr-location-task';
 export const AUTO_END_HOUR = 23; // duty auto-ends at 11:59 PM if DSR forgets
 export const MIN_FREE_MB_WARN = 200;

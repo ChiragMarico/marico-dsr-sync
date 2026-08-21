@@ -112,8 +112,10 @@ export class ChunkedRecorder {
   private warned = false;
   private recoveryAttempt = 0;
   private recovering = false;
-  /** Files produced by earlier attempts, so a partial capture is never lost. */
-  private priorSegments: string[] = [];
+  /** When the CURRENT segment began — reset by recovery, unlike startMs. */
+  private segStartMs = 0;
+  /** Segments closed by recovery rebuilds, so a partial capture is never lost. */
+  private priorSegments: ChunkClosedInfo[] = [];
 
   /** Watchdog observations, for the manifest. */
   getMicHealth(): MicHealth {
@@ -157,6 +159,7 @@ export class ChunkedRecorder {
         await withTimeout(rec.prepareToRecordAsync(), 5000);
         rec.record();
         this.startMs = Date.now();
+        this.segStartMs = this.startMs;
         // Captured at start because it is the variable we could never explain
         // the silent recordings by — whether the app was foregrounded at the
         // moment Android decided whether to grant the microphone.
@@ -248,13 +251,22 @@ export class ChunkedRecorder {
         this.meterTimer = null;
       }
 
-      // Keep anything already captured before tearing the recorder down.
+      // Keep anything already captured before tearing the recorder down. The
+      // segment is closed with its own timing and reported at stop(), so audio
+      // from before a mid-visit failure still reaches the manifest and uploads.
       const old = this.recorder;
       this.recorder = null;
       if (old) {
         try {
           await old.stop();
-          if (old.uri) this.priorSegments.push(old.uri);
+          if (old.uri) {
+            this.priorSegments.push({
+              file: `chunk_${String(this.priorSegments.length + 1).padStart(3, '0')}.m4a`,
+              startTs: new Date(this.segStartMs).toISOString(),
+              durationS: Math.max(1, Math.round((Date.now() - this.segStartMs) / 1000)),
+              path: old.uri,
+            });
+          }
         } catch {
           /* nothing salvageable from this attempt */
         }
@@ -285,6 +297,7 @@ export class ChunkedRecorder {
       this.recorder = rec;
       await withTimeout(rec.prepareToRecordAsync(), 5000);
       rec.record();
+      this.segStartMs = Date.now();
       this.silentRun = 0;
       this.startWatchdog(rec);
 
@@ -303,8 +316,13 @@ export class ChunkedRecorder {
       clearInterval(this.meterTimer);
       this.meterTimer = null;
     }
-    // Never saw anything above the floor → the whole recording is silence.
-    if (this.health.peakDb <= SILENT_DB) this.health.wasSilent = true;
+    // Call it silent only when the watchdog actually WATCHED silence happen.
+    // peakDb alone is not enough: if getStatus() throws every tick (seen in the
+    // field on a 16s clip that measurably contains speech), peakDb never moves
+    // off the floor even though nothing silent was observed.
+    if (this.health.peakDb <= SILENT_DB && this.health.silentSeconds >= SILENT_SECONDS) {
+      this.health.wasSilent = true;
+    }
   }
 
   private async detectMicSource(rec: AudioRecorder): Promise<void> {
@@ -335,12 +353,15 @@ export class ChunkedRecorder {
       this.cb.onInterrupted();
     }
 
+    // Segments closed by recovery rebuilds go out first, in order; the final
+    // recording follows with the next chunk number. Numbering matches the S3
+    // keys the upload queue derives from these names.
+    for (const seg of this.priorSegments) this.cb.onChunkClosed(seg);
     if (uri) {
-      const durationS = Math.max(1, Math.round((Date.now() - this.startMs) / 1000));
       this.cb.onChunkClosed({
-        file: 'chunk_001.m4a',
-        startTs: new Date(this.startMs).toISOString(),
-        durationS,
+        file: `chunk_${String(this.priorSegments.length + 1).padStart(3, '0')}.m4a`,
+        startTs: new Date(this.segStartMs).toISOString(),
+        durationS: Math.max(1, Math.round((Date.now() - this.segStartMs) / 1000)),
         path: uri,
       });
     }
