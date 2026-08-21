@@ -1,4 +1,5 @@
 /** Visit manifest (PRD §9). One per visit, written when the visit finalizes. */
+import type { MicHealth } from './recorder';
 import { APP_VERSION, BUILD_LABEL } from '../constants';
 
 export interface ChunkMeta {
@@ -43,13 +44,7 @@ export interface Manifest {
    * silence rather than an error, so without this a lost visit is
    * indistinguishable from a quiet one until someone probes the audio.
    */
-  mic_health?: {
-    peakDb: number;
-    silentSeconds: number;
-    wasSilent: boolean;
-    startedInState: string;
-    silentInState: string | null;
-  };
+  mic_health?: MicHealth;
   device: { model: string; os: string };
 }
 
