@@ -28,7 +28,6 @@ import { ChunkedRecorder } from '../recording/recorder';
 import { Outlet, Session } from '../types';
 import { logEvent, uploadDayLog } from '../logs/daylog';
 import {
-  alertMicSilent,
   clearRecordingNotification,
   showRecordingNotification,
 } from './notifications';
@@ -462,8 +461,10 @@ class DutyController {
       onMicSilent: ({ afterSeconds, appState }) => {
         // Warn the rep now — a silent visit is unrecoverable once they leave.
         // The phone is in a pocket, so this has to buzz, not just draw a banner.
+        // Flag it for the manifest and the admin monitor only. The rep is not
+        // looking at the phone, so there is nobody to notify — the recorder
+        // repairs itself instead (see ChunkedRecorder.attemptRecovery).
         this.set({ micSilent: true });
-        void alertMicSilent(t('micSilentNotifTitle'), t('micSilentNotifBody'));
         void logEvent(this.session?.dsr.id ?? '?', active.date, 'mic_silent', {
           outlet: active.outlet.outlet_id,
           afterSeconds,

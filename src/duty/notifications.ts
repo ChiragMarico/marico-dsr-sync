@@ -6,7 +6,7 @@
  * alerts (location revoked, duty interrupted), all bilingual per PRD §10.
  */
 import * as Notifications from 'expo-notifications';
-import { Platform, Vibration } from 'react-native';
+import { Platform } from 'react-native';
 import { COLORS } from '../constants';
 
 export const DUTY_CHANNEL = 'duty';
@@ -17,7 +17,6 @@ export const ALERT_CHANNEL = 'alerts';
  * phone in a pocket — an on-screen banner reaches nobody, so this has to be
  * something they physically feel.
  */
-export const MIC_CHANNEL = 'mic-failure';
 
 let recordingNotifId: string | null = null;
 
@@ -40,16 +39,6 @@ export async function setupNotifications(): Promise<void> {
       name: 'Alerts',
       importance: Notifications.AndroidImportance.HIGH,
       showBadge: false,
-    });
-    await Notifications.setNotificationChannelAsync(MIC_CHANNEL, {
-      name: 'Recording problem',
-      importance: Notifications.AndroidImportance.MAX, // heads-up + sound
-      showBadge: true,
-      sound: 'default',
-      enableVibrate: true,
-      // Long, distinctive pattern — must be noticeable through a trouser pocket.
-      vibrationPattern: [0, 600, 300, 600, 300, 600],
-      lightColor: COLORS.recording,
     });
   }
 }
@@ -90,28 +79,6 @@ export async function clearRecordingNotification(): Promise<void> {
  * notification because the rep is not looking at the screen — this is the only
  * way they learn the visit is being lost while they can still do something.
  */
-export async function alertMicSilent(title: string, body: string): Promise<void> {
-  // Vibrate directly as well as via the notification: OEM skins sometimes
-  // suppress notification vibration for backgrounded apps, and this is the one
-  // alert that must not be silently dropped.
-  try {
-    Vibration.vibrate([0, 600, 300, 600, 300, 600]);
-  } catch {
-    /* vibration unavailable */
-  }
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title,
-      body,
-      color: COLORS.recording,
-      priority: 'max',
-      sound: 'default',
-      vibrate: [0, 600, 300, 600, 300, 600],
-      ...(Platform.OS === 'android' ? { channelId: MIC_CHANNEL } : {}),
-    },
-    trigger: null,
-  });
-}
 
 /** One-off high-priority alert (location revoked, duty interrupted, etc.). */
 export async function alert(title: string, body: string): Promise<void> {

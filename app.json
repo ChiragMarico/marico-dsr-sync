@@ -59,7 +59,8 @@
           "color": "#0E8A3E"
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      "./plugins/withMicForegroundService"
     ],
     "extra": {
       "eas": {

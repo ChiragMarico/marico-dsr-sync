@@ -20,8 +20,23 @@ import { AUDIO_OPTIONS } from './audioConfig';
  * reads around -50 dB from room tone.
  */
 const SILENT_DB = -80;
-/** Consecutive silent seconds before we call it: long enough to ignore a pause. */
+/** Consecutive silent seconds before we act: long enough to ignore a pause. */
 const SILENT_SECONDS = 8;
+
+/**
+ * Recovery ladder, tried in order when the microphone yields nothing.
+ *
+ * Each rung fully tears the recorder down and rebuilds it — releasing the mic
+ * is what gives Android a chance to grant it again — and escalates the capture
+ * source. `MIC` is the default that fails; the others are separate paths
+ * through Android's audio policy and are not always refused together.
+ * `voice_recognition` in particular is intended for background speech capture.
+ *
+ * The recording being repaired is already silent, so a failed attempt costs
+ * nothing. Doing this without asking the rep is the entire point: they work
+ * with the phone in a pocket and cannot act on a prompt.
+ */
+const RECOVERY_SOURCES = ['voice_recognition', 'voice_communication', 'unprocessed'] as const;
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -65,6 +80,10 @@ export interface MicHealth {
   startedInState: string;
   /** App state when silence was first detected, if it was. */
   silentInState: string | null;
+  /** How many times the recorder rebuilt itself trying to get audio. */
+  recoveryAttempts: number;
+  /** The capture source that finally produced sound, if any. */
+  recoveredWith: string | null;
 }
 
 export class ChunkedRecorder {
@@ -78,9 +97,15 @@ export class ChunkedRecorder {
     wasSilent: false,
     startedInState: 'unknown',
     silentInState: null,
+    recoveryAttempts: 0,
+    recoveredWith: null,
   };
   private silentRun = 0;
   private warned = false;
+  private recoveryAttempt = 0;
+  private recovering = false;
+  /** Files produced by earlier attempts, so a partial capture is never lost. */
+  private priorSegments: string[] = [];
 
   /** Watchdog observations, for the manifest. */
   getMicHealth(): MicHealth {
@@ -163,25 +188,105 @@ export class ChunkedRecorder {
         return; // recorder gone; stop() will clean up
       }
       if (db > this.health.peakDb) this.health.peakDb = db;
+      // Audio after a rebuild means recovery worked — stop calling it silent.
+      if (db > SILENT_DB && this.health.wasSilent && this.recoveryAttempt > 0) {
+        this.health.wasSilent = false;
+      }
 
       if (db <= SILENT_DB) {
         this.silentRun++;
         if (this.silentRun > this.health.silentSeconds) {
           this.health.silentSeconds = this.silentRun;
         }
-        if (this.silentRun >= SILENT_SECONDS && !this.warned) {
-          this.warned = true;
-          this.health.wasSilent = true;
-          this.health.silentInState = AppState.currentState ?? 'unknown';
-          this.cb.onMicSilent?.({
-            afterSeconds: Math.round((Date.now() - this.startMs) / 1000),
-            appState: this.health.silentInState,
-          });
+        if (this.silentRun >= SILENT_SECONDS && !this.recovering) {
+          if (!this.warned) {
+            this.warned = true;
+            this.health.wasSilent = true;
+            this.health.silentInState = AppState.currentState ?? 'unknown';
+            this.cb.onMicSilent?.({
+              afterSeconds: Math.round((Date.now() - this.startMs) / 1000),
+              appState: this.health.silentInState,
+            });
+          }
+          // Fix it rather than report it. The rep is not looking at the phone.
+          void this.attemptRecovery();
         }
       } else {
         this.silentRun = 0;
       }
     }, 1000);
+  }
+
+  /**
+   * Rebuild the recorder on a different capture source and keep going.
+   *
+   * Whatever we have captured so far is preserved as a segment rather than
+   * discarded — if the mic was live for the first thirty seconds, that audio is
+   * real and worth keeping even though the rest was lost.
+   */
+  private async attemptRecovery(): Promise<void> {
+    if (this.recovering || this.stopped) return;
+    if (this.recoveryAttempt >= RECOVERY_SOURCES.length) return; // ladder exhausted
+    this.recovering = true;
+
+    const source = RECOVERY_SOURCES[this.recoveryAttempt];
+    this.recoveryAttempt++;
+    this.health.recoveryAttempts = this.recoveryAttempt;
+
+    try {
+      if (this.meterTimer) {
+        clearInterval(this.meterTimer);
+        this.meterTimer = null;
+      }
+
+      // Keep anything already captured before tearing the recorder down.
+      const old = this.recorder;
+      this.recorder = null;
+      if (old) {
+        try {
+          await old.stop();
+          if (old.uri) this.priorSegments.push(old.uri);
+        } catch {
+          /* nothing salvageable from this attempt */
+        }
+        try {
+          old.release(); // releasing is what lets Android re-grant the mic
+        } catch {
+          /* already gone */
+        }
+      }
+
+      // Re-assert the audio session before asking again.
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        allowsBackgroundRecording: true,
+        interruptionMode: 'doNotMix',
+      });
+      await delay(500);
+
+      // Cast for the same reason outputFormat/audioEncoder are set flat in
+      // audioConfig: the Android module reads `audioSource` off the options
+      // object, but the published type omits it.
+      const rec = new AudioModule.AudioRecorder({
+        ...AUDIO_OPTIONS,
+        audioSource: source,
+      } as unknown as typeof AUDIO_OPTIONS);
+      this.recorder = rec;
+      await withTimeout(rec.prepareToRecordAsync(), 5000);
+      rec.record();
+      this.silentRun = 0;
+      this.startWatchdog(rec);
+
+      // If this source works, the next second of metering clears wasSilent.
+      this.health.recoveredWith = source;
+    } catch {
+      // This rung failed; the next silence window tries the one below it.
+      this.health.recoveredWith = null;
+    } finally {
+      this.recovering = false;
+    }
   }
 
   private stopWatchdog(): void {
