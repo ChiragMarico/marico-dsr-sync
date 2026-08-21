@@ -126,6 +126,19 @@ async function listAll(prefix: string): Promise<Obj[]> {
  * Cached because manifests never change once written.
  */
 const durationCache = new Map<string, number | null>();
+/**
+ * What the app's own watchdog observed for each visit. Far more reliable than
+ * inferring from the audio: the app knows whether the microphone ever produced
+ * a signal, and whether it was foregrounded when Android decided.
+ */
+interface MicHealth {
+  peakDb: number;
+  silentSeconds: number;
+  wasSilent: boolean;
+  startedInState: string;
+  silentInState: string | null;
+}
+const micCache = new Map<string, MicHealth | null>();
 
 async function fetchDurations(manifestKeys: string[]): Promise<void> {
   const missing = manifestKeys.filter((k) => !durationCache.has(k));
@@ -137,10 +150,12 @@ async function fetchDurations(manifestKeys: string[]): Promise<void> {
           durationCache.set(k, null);
           return;
         }
-        const j = (await r.json()) as { total_duration_s?: number };
+        const j = (await r.json()) as { total_duration_s?: number; mic_health?: MicHealth };
         durationCache.set(k, typeof j.total_duration_s === 'number' ? j.total_duration_s : null);
+        micCache.set(k, j.mic_health ?? null);
       } catch {
         durationCache.set(k, null);
+        micCache.set(k, null);
       }
     }),
   );
@@ -323,6 +338,10 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
  .ctime{display:block;color:#8A93A8;font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
  .clip audio{height:36px}
  .dl{font-size:12px;color:#1C5AA8;text-decoration:none}
+ .badge{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;margin-left:6px}
+ .badge.good{background:rgba(23,128,61,.12);color:#17803D}
+ .badge.bad{background:rgba(196,54,43,.12);color:#C4362B}
+ .state{font-size:11px;color:#8A93A8;margin-left:4px}
 </style></head><body><div class="wrap">
 <h1>Sync pilot monitor</h1>
 <p class="sub">${r.todayIST} · refreshed ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · <a href="javascript:location.reload()" style="color:#1C5AA8">refresh</a></p>
@@ -330,6 +349,18 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
   <div class="card"><div class="k">Active now</div><div class="v" style="color:#17803D">${active}</div></div>
   <div class="card"><div class="k">Reps seen</div><div class="v">${real.length}</div></div>
   <div class="card"><div class="k">Recordings today</div><div class="v">${r.totalToday}</div></div>
+  <div class="card"><div class="k">Mic health today</div>${(() => {
+    const today = r.clips.filter((c) => c.date === r.todayIST);
+    const known = today.map((c) => micCache.get(c.manifestKey)).filter((m): m is MicHealth => !!m);
+    if (!known.length) {
+      return `<div class="v" style="font-size:19px;color:#8A93A8">—</div>
+        <div style="font-size:11px;color:#8A93A8;margin-top:4px">awaiting v8.2 builds</div>`;
+    }
+    const bad = known.filter((m) => m.wasSilent).length;
+    const pct = Math.round(((known.length - bad) / known.length) * 100);
+    return `<div class="v" style="font-size:24px;color:${pct >= 90 ? '#17803D' : pct >= 60 ? '#A96908' : '#C4362B'}">${pct}%</div>
+      <div style="font-size:11px;color:#8A93A8;margin-top:4px">${bad} of ${known.length} silent</div>`;
+  })()}</div>
   <div class="card"><div class="k">Recorded today</div><div class="v" style="font-size:24px">${(() => {
     const secs = r.clips
       .filter((c) => c.date === r.todayIST)
@@ -360,7 +391,16 @@ ${r.clips.map((c) => `
   <div class="clip">
     <div class="cmeta">
       <b>${c.dsr}</b>
-      <span class="cout">${c.outlet}</span>
+      <span class="cout">${c.outlet}</span>${(() => {
+        const m = micCache.get(c.manifestKey);
+        if (!m) return '';
+        // startedInState is the datum that was missing while we were guessing:
+        // whether the app was foregrounded when Android granted (or refused) the mic.
+        const state = `<span class="state">${m.startedInState}</span>`;
+        return m.wasSilent
+          ? ` <span class="badge bad">SILENT · peak ${Math.round(m.peakDb)}dB</span> ${state}`
+          : ` <span class="badge good">audio ${Math.round(m.peakDb)}dB</span> ${state}`;
+      })()}
       <span class="ctime">${(() => {
         const d = durationCache.get(c.manifestKey);
         // Under ~5s usually means the geofence fired and the rep moved off

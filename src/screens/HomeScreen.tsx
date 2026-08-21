@@ -232,6 +232,14 @@ export default function HomeScreen({ navigation, session }: Props<'Home'> & Extr
         </Card>
       )}
 
+      {/* Loudest possible signal: the visit in progress is capturing nothing.
+          Red rather than amber because it is unrecoverable once they leave. */}
+      {duty.micSilent && duty.recording && (
+        <View style={styles.errBanner}>
+          <Text style={styles.errText}>{t('micSilentBanner')}</Text>
+        </View>
+      )}
+
       {duty.recordingError && (
         <View style={styles.warnBanner}>
           <Text style={styles.warnText}>{duty.recordingError}</Text>

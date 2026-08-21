@@ -14,6 +14,7 @@ export type DayLogEventType =
   | 'visit_enter'
   | 'visit_exit'
   | 'recording_failed'
+  | 'mic_silent'
   | 'error';
 
 export interface DayLogEvent {

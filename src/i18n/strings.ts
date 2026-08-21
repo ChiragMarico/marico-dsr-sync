@@ -50,6 +50,9 @@ export const en = {
   locationOffBanner: 'Location is off — visits won’t be detected. Tap to fix.',
   weakSignalBanner:
     'Location signal is weak (±{m} m) — visits can’t be detected here. Move near a window or door, or tap “Record here”.',
+  micSilentNotifTitle: '⚠️ No sound is being recorded',
+  micSilentNotifBody: 'Open Sync and keep it on screen for this visit. Tell your supervisor.',
+  micSilentBanner: 'No sound is being recorded. Open the app and keep it on screen during the visit, then tell your supervisor.',
   micBusyBanner: 'Recording could not start — the mic may be busy (are you on a call?). The visit is still logged.',
   noOutletsTitle: 'No outlets',
   noOutletsBody: 'No outlets assigned to you. Contact your supervisor.',

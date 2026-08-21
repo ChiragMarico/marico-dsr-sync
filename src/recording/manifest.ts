@@ -38,6 +38,18 @@ export interface Manifest {
   flags: ManifestFlags;
   app_version: string;
   app_build: string;
+  /**
+   * What the microphone actually produced. Android reports a denied mic as
+   * silence rather than an error, so without this a lost visit is
+   * indistinguishable from a quiet one until someone probes the audio.
+   */
+  mic_health?: {
+    peakDb: number;
+    silentSeconds: number;
+    wasSilent: boolean;
+    startedInState: string;
+    silentInState: string | null;
+  };
   device: { model: string; os: string };
 }
 

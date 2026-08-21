@@ -33,6 +33,9 @@ export const AUDIO_OPTIONS: RecordingOptions = {
   // Record straight to the persistent document dir (not cache) so we never
   // have to move the file before upload — the move was silently dropping audio.
   directory: 'document',
+  // Required for the silence watchdog: without this the recorder reports no
+  // input level and we cannot tell a dead microphone from a quiet shop.
+  isMeteringEnabled: true,
   extension: '.m4a',
   sampleRate: AUDIO_SAMPLE_RATE,
   numberOfChannels: 1,

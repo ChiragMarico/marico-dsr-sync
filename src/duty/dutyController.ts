@@ -28,9 +28,11 @@ import { ChunkedRecorder } from '../recording/recorder';
 import { Outlet, Session } from '../types';
 import { logEvent, uploadDayLog } from '../logs/daylog';
 import {
+  alertMicSilent,
   clearRecordingNotification,
   showRecordingNotification,
 } from './notifications';
+import { t } from '../i18n';
 import { clearDutyState, saveDutyState } from './dutyState';
 import {
   configureUpload,
@@ -69,6 +71,12 @@ export interface DutyUiState {
   confirmTotalS: number;
   /** Set when a visit was detected but audio couldn't start (e.g. mic busy on a call). */
   recordingError: string | null;
+  /**
+   * Set while the microphone is producing silence during an active recording.
+   * Android does not error in this case, so this is the only in-app signal a
+   * rep gets that the visit is being lost.
+   */
+  micSilent: boolean;
 }
 
 type Listener = (s: DutyUiState) => void;
@@ -114,6 +122,7 @@ class DutyController {
     confirmStartedAt: null,
     confirmTotalS: 0,
     recordingError: null,
+    micSilent: false,
   };
   private listeners = new Set<Listener>();
   private devMode = false;
@@ -176,6 +185,7 @@ class DutyController {
       confirmStartedAt: null,
       confirmTotalS: 0,
       recordingError: null,
+      micSilent: false,
     });
   }
 
@@ -449,6 +459,17 @@ class DutyController {
       onInterrupted: () => {
         active.manifest.flags.interrupted_by_call = true;
       },
+      onMicSilent: ({ afterSeconds, appState }) => {
+        // Warn the rep now — a silent visit is unrecoverable once they leave.
+        // The phone is in a pocket, so this has to buzz, not just draw a banner.
+        this.set({ micSilent: true });
+        void alertMicSilent(t('micSilentNotifTitle'), t('micSilentNotifBody'));
+        void logEvent(this.session?.dsr.id ?? '?', active.date, 'mic_silent', {
+          outlet: active.outlet.outlet_id,
+          afterSeconds,
+          appState,
+        });
+      },
     });
   }
 
@@ -538,6 +559,7 @@ class DutyController {
     // Reflect recording state in the UI immediately (card appears here).
     this.visitedOutletIds.add(outlet.outlet_id);
     this.set({
+      micSilent: false, // fresh visit, fresh verdict
       recording: started,
       recordingOutletName: started ? outlet.name : null,
       recordingStartedAt: started ? Date.now() : null,
@@ -583,6 +605,9 @@ class DutyController {
       } catch {
         active.manifest.flags.recording_incomplete = true;
       }
+      // Persist what the mic actually did, so silent visits are queryable
+      // rather than only discoverable by downloading and probing the audio.
+      active.manifest.mic_health = active.recorder.getMicHealth();
     }
 
     active.manifest.exit_ts = new Date(fix.ts).toISOString();
@@ -613,6 +638,7 @@ class DutyController {
       recordingOutletName: null,
       recordingStartedAt: null,
       recordingError: null,
+      micSilent: false,
     });
     await this.refreshCounts();
   }
