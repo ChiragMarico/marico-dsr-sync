@@ -12,6 +12,7 @@ import { AppState } from 'react-native';
 import { AudioModule, setAudioModeAsync, type AudioRecorder } from 'expo-audio';
 import type { Directory } from 'expo-file-system';
 import { AUDIO_OPTIONS } from './audioConfig';
+import { beginNativeLogCapture, collectNativeLogs } from './nativeAudioLog';
 
 /**
  * Input level below which we treat the microphone as producing nothing.
@@ -84,6 +85,12 @@ export interface MicHealth {
   recoveryAttempts: number;
   /** The capture source that finally produced sound, if any. */
   recoveredWith: string | null;
+  /**
+   * Native audio errors expo-audio swallowed during this recording — most
+   * importantly a refused microphone foreground service start, which is
+   * otherwise completely invisible.
+   */
+  nativeErrors: string[];
 }
 
 export class ChunkedRecorder {
@@ -99,6 +106,7 @@ export class ChunkedRecorder {
     silentInState: null,
     recoveryAttempts: 0,
     recoveredWith: null,
+    nativeErrors: [],
   };
   private silentRun = 0;
   private warned = false;
@@ -109,7 +117,7 @@ export class ChunkedRecorder {
 
   /** Watchdog observations, for the manifest. */
   getMicHealth(): MicHealth {
-    return { ...this.health };
+    return { ...this.health, nativeErrors: collectNativeLogs() };
   }
 
   // `dir` kept for signature compatibility; recording goes to the document dir.
@@ -119,6 +127,7 @@ export class ChunkedRecorder {
   ) {}
 
   async start(): Promise<void> {
+    beginNativeLogCapture();
     await setAudioModeAsync({
       allowsRecording: true,
       playsInSilentMode: true,

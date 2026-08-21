@@ -137,6 +137,9 @@ interface MicHealth {
   wasSilent: boolean;
   startedInState: string;
   silentInState: string | null;
+  recoveryAttempts?: number;
+  recoveredWith?: string | null;
+  nativeErrors?: string[];
 }
 const micCache = new Map<string, MicHealth | null>();
 
@@ -341,7 +344,8 @@ function page(r: Awaited<ReturnType<typeof buildReport>>) {
  .badge{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;margin-left:6px}
  .badge.good{background:rgba(23,128,61,.12);color:#17803D}
  .badge.bad{background:rgba(196,54,43,.12);color:#C4362B}
- .state{font-size:11px;color:#8A93A8;margin-left:4px}
+ .nativeErr{display:block;margin-top:4px;font:11px ui-monospace,Menlo,monospace;color:#C4362B;white-space:pre-wrap;word-break:break-word}
+    .state{font-size:11px;color:#8A93A8;margin-left:4px}
 </style></head><body><div class="wrap">
 <h1>Sync pilot monitor</h1>
 <p class="sub">${r.todayIST} · refreshed ${new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false})} IST · <a href="javascript:location.reload()" style="color:#1C5AA8">refresh</a></p>
@@ -396,10 +400,19 @@ ${r.clips.map((c) => `
         if (!m) return '';
         // startedInState is the datum that was missing while we were guessing:
         // whether the app was foregrounded when Android granted (or refused) the mic.
-        const state = `<span class="state">${m.startedInState}</span>`;
-        return m.wasSilent
-          ? ` <span class="badge bad">SILENT · peak ${Math.round(m.peakDb)}dB</span> ${state}`
-          : ` <span class="badge good">audio ${Math.round(m.peakDb)}dB</span> ${state}`;
+        const state = `<span class="state">started ${m.startedInState}</span>`;
+        // The swallowed native error, if the phone caught one — direct evidence
+        // for whether Android refused the microphone foreground service.
+        const errs = (m.nativeErrors ?? [])
+          .map((e) => `<div class="nativeErr">⚠ ${e}</div>`)
+          .join('');
+        const recov = m.recoveryAttempts
+          ? ` <span class="badge">recovery ×${m.recoveryAttempts}${m.recoveredWith ? ` → ${m.recoveredWith}` : ''}</span>`
+          : '';
+        const verdict = m.wasSilent
+          ? ` <span class="badge bad">SILENT · peak ${Math.round(m.peakDb)}dB</span>`
+          : ` <span class="badge good">audio ${Math.round(m.peakDb)}dB</span>`;
+        return `${verdict} ${state}${recov}${errs}`;
       })()}
       <span class="ctime">${(() => {
         const d = durationCache.get(c.manifestKey);
