@@ -158,6 +158,9 @@ export const en = {
   fuYourVersion: 'Your version: {v}',
   fuNeeded: 'Required: {v}',
   fuDownload: 'Download Update',
+  fuDownloading: 'Downloading…',
+  fuAllowInstall: 'Allow Installing Updates',
+  fuAllowInstallBody: 'One-time step: turn on “Allow from this source”, then tap Update again.',
   fuHelp: 'After downloading, tap the file to install. Ask your supervisor if you need help.',
 
   // ── Voiceprints (admin) ──

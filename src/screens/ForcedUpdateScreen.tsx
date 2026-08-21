@@ -1,10 +1,11 @@
-import React from 'react';
-import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { APP_VERSION } from '../constants';
 import { UpdateStatus } from '../update/updateCheck';
 import { C, R, SHADOW, T } from '../ui/theme';
 import { GradientButton } from '../ui/components';
 import { useT } from '../i18n';
+import { downloadAndInstallApk, openInstallPermissionSettings } from '../update/selfInstall';
 
 /**
  * Blocking screen shown when the installed APK is older than
@@ -18,6 +19,20 @@ import { useT } from '../i18n';
  */
 export function ForcedUpdateScreen({ status }: { status: UpdateStatus }) {
   const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  // Shown only after an install attempt fails, which in practice means Android
+  // has not been told this app may install updates. Leading with it would be
+  // one more step for the reps who don't need it.
+  const [needsPermission, setNeedsPermission] = useState(false);
+
+  const install = async () => {
+    if (!status.apkUrl || busy) return;
+    setBusy(true);
+    const res = await downloadAndInstallApk(status.apkUrl);
+    setNeedsPermission(!res.ok);
+    setBusy(false);
+  };
+
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <View style={styles.iconWrap}>
@@ -36,9 +51,20 @@ export function ForcedUpdateScreen({ status }: { status: UpdateStatus }) {
 
       {status.apkUrl ? (
         <GradientButton
-          label={t('fuDownload')}
-          onPress={() => Linking.openURL(status.apkUrl!)}
+          label={busy ? t('fuDownloading') : t('fuDownload')}
+          onPress={install}
+          disabled={busy}
         />
+      ) : null}
+
+      {needsPermission ? (
+        <View style={styles.permWrap}>
+          <Text style={styles.permText}>{t('fuAllowInstallBody')}</Text>
+          <GradientButton
+            label={t('fuAllowInstall')}
+            onPress={() => void openInstallPermissionSettings()}
+          />
+        </View>
       ) : null}
 
       <Text style={styles.help}>{t('fuHelp')}</Text>
@@ -74,5 +100,7 @@ const styles = StyleSheet.create({
   },
   vRow: { ...T.body, fontSize: 15, textAlign: 'center', color: C.mid },
   vNeeded: { color: C.cobalt, fontWeight: '800' },
+  permWrap: { alignSelf: 'stretch', marginTop: 18, gap: 12 },
+  permText: { ...T.body, fontSize: 15, color: C.mid, textAlign: 'center', lineHeight: 22 },
   help: { ...T.caption, fontSize: 14, textAlign: 'center', marginTop: 20, lineHeight: 21 },
 });
